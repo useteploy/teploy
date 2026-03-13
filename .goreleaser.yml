@@ -8,6 +8,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
@@ -15,6 +16,9 @@ builds:
 archives:
   - format: tar.gz
     name_template: "teploy_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
 
 checksum:
   name_template: checksums.txt
@@ -26,6 +30,7 @@ brews:
   - repository:
       owner: useteploy
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/useteploy/teploy
     description: Zero-downtime Docker deploys to any server via SSH
     license: MIT
