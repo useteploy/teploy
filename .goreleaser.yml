@@ -1,0 +1,33 @@
+version: 2
+
+builds:
+  - main: ./cmd/teploy
+    binary: teploy
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "teploy_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+
+brews:
+  - repository:
+      owner: useteploy
+      name: homebrew-tap
+    homepage: https://github.com/useteploy/teploy
+    description: Zero-downtime Docker deploys to any server via SSH
+    license: MIT
+    install: |
+      bin.install "teploy"
