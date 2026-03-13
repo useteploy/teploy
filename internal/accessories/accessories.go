@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/docker"
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/docker"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 const deploymentsDir = "/deployments"

@@ -7,8 +7,8 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/autodeploy"
-	"github.com/teploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/autodeploy"
+	"github.com/useteploy/teploy/internal/config"
 )
 
 func newAutoDeployCmd(flags *Flags) *cobra.Command {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 func rollbackCfg() RollbackConfig {

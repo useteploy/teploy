@@ -7,8 +7,8 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
-	tmpl "github.com/teploy/teploy/internal/template"
+	"github.com/useteploy/teploy/internal/config"
+	tmpl "github.com/useteploy/teploy/internal/template"
 )
 
 func newTemplateCmd(flags *Flags) *cobra.Command {

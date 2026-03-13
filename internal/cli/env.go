@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/env"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/env"
 )
 
 func newEnvCmd(flags *Flags) *cobra.Command {

@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 func newRegistryCmd(flags *Flags) *cobra.Command {

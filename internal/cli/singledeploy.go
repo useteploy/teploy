@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/teploy/teploy/internal/build"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/deploy"
-	"github.com/teploy/teploy/internal/docker"
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/build"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/deploy"
+	"github.com/useteploy/teploy/internal/docker"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 // singleServerDeployer wraps the deploy logic for a single server.

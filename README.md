@@ -5,15 +5,8 @@ Zero-downtime Docker deploys to any server via SSH. Single binary, no management
 ## Install
 
 ```bash
-# macOS
-brew install im-tyler/tap/teploy
-
-# Linux / macOS (manual)
-curl -fsSL https://github.com/im-tyler/teploy/releases/latest/download/teploy-$(uname -s)-$(uname -m) -o /usr/local/bin/teploy
-chmod +x /usr/local/bin/teploy
-
 # From source
-go install github.com/im-tyler/teploy/cmd/teploy@latest
+go install github.com/useteploy/teploy/cmd/teploy@latest
 ```
 
 ## Quickstart

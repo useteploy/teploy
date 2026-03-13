@@ -7,9 +7,9 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/deploy"
-	"github.com/teploy/teploy/internal/state"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/deploy"
+	"github.com/useteploy/teploy/internal/state"
 )
 
 func newHealthCmd(flags *Flags) *cobra.Command {

@@ -8,10 +8,10 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/build"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/dns"
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/build"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/dns"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 type validationResult struct {

@@ -7,9 +7,9 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/accessories"
-	"github.com/teploy/teploy/internal/backup"
-	"github.com/teploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/accessories"
+	"github.com/useteploy/teploy/internal/backup"
+	"github.com/useteploy/teploy/internal/config"
 )
 
 func newAccessoryCmd(flags *Flags) *cobra.Command {

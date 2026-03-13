@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 // Mode represents the detected build method.

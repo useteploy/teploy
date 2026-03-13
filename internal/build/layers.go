@@ -9,7 +9,7 @@ import (
 	osexec "os/exec"
 	"strings"
 
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 // getLocalLayers returns the layer diff IDs for a local Docker image.

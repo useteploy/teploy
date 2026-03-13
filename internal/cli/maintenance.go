@@ -7,8 +7,8 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/caddy"
-	"github.com/teploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/caddy"
+	"github.com/useteploy/teploy/internal/config"
 )
 
 func newMaintenanceCmd(flags *Flags) *cobra.Command {

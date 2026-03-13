@@ -1,4 +1,4 @@
-module github.com/teploy/teploy
+module github.com/useteploy/teploy
 
 go 1.25.0
 

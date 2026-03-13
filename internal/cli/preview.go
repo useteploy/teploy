@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/preview"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/preview"
 )
 
 func newPreviewCmd(flags *Flags) *cobra.Command {

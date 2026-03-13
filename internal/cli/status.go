@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/docker"
-	"github.com/teploy/teploy/internal/state"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/docker"
+	"github.com/useteploy/teploy/internal/state"
 )
 
 func newStatusCmd(flags *Flags) *cobra.Command {

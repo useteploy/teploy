@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teploy/teploy/internal/ssh"
-	"github.com/teploy/teploy/internal/state"
+	"github.com/useteploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/state"
 )
 
 // ssOutput is a minimal ss -tln output with no ports in the ephemeral range.

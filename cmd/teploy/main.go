@@ -1,6 +1,6 @@
 package main
 
-import "github.com/teploy/teploy/internal/cli"
+import "github.com/useteploy/teploy/internal/cli"
 
 var version = "dev"
 

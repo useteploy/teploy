@@ -9,7 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/config"
 	"gopkg.in/yaml.v3"
 )
 

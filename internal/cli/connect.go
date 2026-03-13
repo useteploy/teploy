@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 // connectForApp resolves the server from app config and establishes an SSH connection.

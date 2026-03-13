@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/teploy/teploy/internal/caddy"
-	"github.com/teploy/teploy/internal/docker"
-	"github.com/teploy/teploy/internal/ssh"
-	"github.com/teploy/teploy/internal/state"
+	"github.com/useteploy/teploy/internal/caddy"
+	"github.com/useteploy/teploy/internal/docker"
+	"github.com/useteploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/state"
 )
 
 // RollbackConfig holds parameters for a rollback operation.

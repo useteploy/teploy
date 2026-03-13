@@ -7,9 +7,9 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/deploy"
-	"github.com/teploy/teploy/internal/notify"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/deploy"
+	"github.com/useteploy/teploy/internal/notify"
 )
 
 func newStopCmd(flags *Flags) *cobra.Command {

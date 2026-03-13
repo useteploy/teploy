@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 func TestRead_MalformedPort(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 func TestSetRoute_FirstDeploy(t *testing.T) {

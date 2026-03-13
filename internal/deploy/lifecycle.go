@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/teploy/teploy/internal/docker"
-	"github.com/teploy/teploy/internal/ssh"
-	"github.com/teploy/teploy/internal/state"
+	"github.com/useteploy/teploy/internal/docker"
+	"github.com/useteploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/state"
 )
 
 // Lifecycle manages stop/start/restart of app containers.

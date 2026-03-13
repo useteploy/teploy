@@ -7,8 +7,8 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/backup"
-	"github.com/teploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/backup"
+	"github.com/useteploy/teploy/internal/config"
 )
 
 func newBackupCmd(flags *Flags) *cobra.Command {

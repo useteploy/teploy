@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 // Container represents a Docker container as reported by docker ps.

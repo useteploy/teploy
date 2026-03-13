@@ -7,9 +7,9 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/network"
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/network"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 func newNetworkCmd(flags *Flags) *cobra.Command {

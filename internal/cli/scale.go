@@ -10,10 +10,10 @@ import (
 	"strconv"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/caddy"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/multideploy"
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/caddy"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/multideploy"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 func newScaleCmd(flags *Flags) *cobra.Command {

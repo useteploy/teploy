@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/ssh"
 )
 
 func TestEnsureRunning_New(t *testing.T) {

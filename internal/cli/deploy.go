@@ -10,16 +10,16 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/teploy/teploy/internal/accessories"
-	"github.com/teploy/teploy/internal/build"
-	"github.com/teploy/teploy/internal/config"
-	"github.com/teploy/teploy/internal/deploy"
-	"github.com/teploy/teploy/internal/dns"
-	"github.com/teploy/teploy/internal/docker"
-	"github.com/teploy/teploy/internal/multideploy"
-	"github.com/teploy/teploy/internal/notify"
-	"github.com/teploy/teploy/internal/ssh"
-	"github.com/teploy/teploy/internal/state"
+	"github.com/useteploy/teploy/internal/accessories"
+	"github.com/useteploy/teploy/internal/build"
+	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/deploy"
+	"github.com/useteploy/teploy/internal/dns"
+	"github.com/useteploy/teploy/internal/docker"
+	"github.com/useteploy/teploy/internal/multideploy"
+	"github.com/useteploy/teploy/internal/notify"
+	"github.com/useteploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/state"
 )
 
 func newDeployCmd(flags *Flags) *cobra.Command {
