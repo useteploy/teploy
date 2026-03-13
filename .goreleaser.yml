@@ -36,3 +36,12 @@ brews:
     license: MIT
     install: |
       bin.install "teploy"
+
+scoops:
+  - repository:
+      owner: useteploy
+      name: scoop-bucket
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/useteploy/teploy
+    description: Zero-downtime Docker deploys to any server via SSH
+    license: MIT
