@@ -1,0 +1,161 @@
+package deploy
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/teploy/teploy/internal/ssh"
+)
+
+func rollbackCfg() RollbackConfig {
+	return RollbackConfig{
+		App:    "myapp",
+		Domain: "myapp.com",
+		Health: HealthConfig{Timeout: 5 * time.Second, Interval: 10 * time.Millisecond},
+	}
+}
+
+func TestRollback(t *testing.T) {
+	stateContent := "current_port=49153\ncurrent_hash=v2\nprevious_port=49152\nprevious_hash=v1\n"
+	mock := ssh.NewMockExecutor("1.2.3.4",
+		ssh.MockCommand{Match: "cat /deployments/myapp/state", Output: stateContent},
+		ssh.MockCommand{Match: "docker ps --all --filter label=teploy.app=myapp",
+			Output: `{"ID":"aaa","Names":"myapp-web-v1","Image":"myapp:latest","State":"exited","Status":"Exited"}` + "\n" +
+				`{"ID":"bbb","Names":"myapp-web-v2","Image":"myapp:latest","State":"running","Status":"Up 1h"}`,
+		},
+		ssh.MockCommand{Match: "docker start", Output: ""},
+		ssh.MockCommand{Match: "curl", Output: "200"},
+		ssh.MockCommand{Match: "caddy", Output: ""},
+		ssh.MockCommand{Match: "docker stop", Output: ""},
+		ssh.MockCommand{Match: "mkdir -p", Output: ""},
+		ssh.MockCommand{Match: "cat /tmp", Output: ""},
+		ssh.MockCommand{Match: "UPLOAD:", Output: ""},
+	)
+
+	var buf bytes.Buffer
+	err := Rollback(context.Background(), mock, &buf, rollbackCfg())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Rolling back") {
+		t.Error("expected 'Rolling back' message")
+	}
+	if !strings.Contains(output, "Rolled back myapp to version v1") {
+		t.Errorf("expected rollback success message, got: %s", output)
+	}
+
+	// Verify previous container was started.
+	startCalls := 0
+	for _, call := range mock.Calls {
+		if strings.HasPrefix(call, "docker start") {
+			startCalls++
+			if !strings.Contains(call, "myapp-web-v1") {
+				t.Errorf("expected start for v1 container, got: %s", call)
+			}
+		}
+	}
+	if startCalls != 1 {
+		t.Errorf("expected 1 start call, got %d", startCalls)
+	}
+
+	// Verify current container was stopped.
+	stopCalls := 0
+	for _, call := range mock.Calls {
+		if strings.HasPrefix(call, "docker stop") {
+			stopCalls++
+			if !strings.Contains(call, "myapp-web-v2") {
+				t.Errorf("expected stop for v2 container, got: %s", call)
+			}
+		}
+	}
+	if stopCalls != 1 {
+		t.Errorf("expected 1 stop call, got %d", stopCalls)
+	}
+
+	// Verify state was swapped.
+	stateData := string(mock.Files["/deployments/myapp/state"])
+	if !strings.Contains(stateData, "current_hash=v1") {
+		t.Errorf("expected state current_hash=v1, got: %s", stateData)
+	}
+	if !strings.Contains(stateData, "previous_hash=v2") {
+		t.Errorf("expected state previous_hash=v2, got: %s", stateData)
+	}
+}
+
+func TestRollback_NoState(t *testing.T) {
+	mock := ssh.NewMockExecutor("1.2.3.4",
+		ssh.MockCommand{Match: "cat /deployments/myapp/state", Err: fmt.Errorf("not found")},
+	)
+
+	err := Rollback(context.Background(), mock, &bytes.Buffer{}, rollbackCfg())
+	if err == nil {
+		t.Fatal("expected error for no state")
+	}
+	if !strings.Contains(err.Error(), "deploy first") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRollback_NoPreviousDeploy(t *testing.T) {
+	stateContent := "current_port=49152\ncurrent_hash=v1\n"
+	mock := ssh.NewMockExecutor("1.2.3.4",
+		ssh.MockCommand{Match: "cat /deployments/myapp/state", Output: stateContent},
+	)
+
+	err := Rollback(context.Background(), mock, &bytes.Buffer{}, rollbackCfg())
+	if err == nil {
+		t.Fatal("expected error for no previous deploy")
+	}
+	if !strings.Contains(err.Error(), "no previous deploy") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRollback_NoPreviousContainers(t *testing.T) {
+	stateContent := "current_port=49153\ncurrent_hash=v2\nprevious_port=49152\nprevious_hash=v1\n"
+	mock := ssh.NewMockExecutor("1.2.3.4",
+		ssh.MockCommand{Match: "cat /deployments/myapp/state", Output: stateContent},
+		ssh.MockCommand{Match: "docker ps --all --filter label=teploy.app=myapp",
+			Output: `{"ID":"bbb","Names":"myapp-web-v2","Image":"myapp:latest","State":"running","Status":"Up 1h"}`,
+		},
+	)
+
+	err := Rollback(context.Background(), mock, &bytes.Buffer{}, rollbackCfg())
+	if err == nil {
+		t.Fatal("expected error for missing previous containers")
+	}
+	if !strings.Contains(err.Error(), "no previous containers") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRollback_HealthCheckFails(t *testing.T) {
+	stateContent := "current_port=49153\ncurrent_hash=v2\nprevious_port=49152\nprevious_hash=v1\n"
+	mock := ssh.NewMockExecutor("1.2.3.4",
+		ssh.MockCommand{Match: "cat /deployments/myapp/state", Output: stateContent},
+		ssh.MockCommand{Match: "docker ps --all --filter label=teploy.app=myapp",
+			Output: `{"ID":"aaa","Names":"myapp-web-v1","Image":"myapp:latest","State":"exited","Status":"Exited"}` + "\n" +
+				`{"ID":"bbb","Names":"myapp-web-v2","Image":"myapp:latest","State":"running","Status":"Up 1h"}`,
+		},
+		ssh.MockCommand{Match: "docker start", Output: ""},
+		ssh.MockCommand{Match: "curl", Err: fmt.Errorf("connection refused")},
+		ssh.MockCommand{Match: "bash -c", Err: fmt.Errorf("connection refused")},
+		ssh.MockCommand{Match: "docker stop", Output: ""},
+	)
+
+	cfg := rollbackCfg()
+	cfg.Health = HealthConfig{Timeout: 100 * time.Millisecond, Interval: 10 * time.Millisecond}
+	err := Rollback(context.Background(), mock, &bytes.Buffer{}, cfg)
+	if err == nil {
+		t.Fatal("expected error for health check failure")
+	}
+	if !strings.Contains(err.Error(), "health check failed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}

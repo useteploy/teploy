@@ -1,0 +1,287 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
+)
+
+// validName matches lowercase alphanumeric names with hyphens (no leading/trailing hyphen).
+var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$`)
+
+// validDomain matches valid domain names and IP-based domains (e.g. 192.168.1.1.nip.io).
+var validDomain = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.-]+[a-zA-Z0-9]$`)
+
+// validPlatform matches Docker platform strings like linux/amd64, linux/arm64, linux/arm/v7.
+var validPlatform = regexp.MustCompile(`^[a-z]+/[a-z0-9]+(/v[0-9]+)?$`)
+
+// HooksConfig holds pre/post deploy hook commands.
+type HooksConfig struct {
+	PreDeploy  string `yaml:"pre_deploy,omitempty" toml:"pre_deploy"`
+	PostDeploy string `yaml:"post_deploy,omitempty" toml:"post_deploy"`
+}
+
+// AccessoryConfig represents a stateful service container (database, cache, etc.).
+type AccessoryConfig struct {
+	Image   string            `yaml:"image" toml:"image"`
+	Port    int               `yaml:"port,omitempty" toml:"port"`
+	Env     map[string]string `yaml:"env,omitempty" toml:"env"`
+	Volumes map[string]string `yaml:"volumes,omitempty" toml:"volumes"`
+}
+
+// NotificationChannelConfig represents a single notification channel.
+type NotificationChannelConfig struct {
+	Type   string   `yaml:"type,omitempty" toml:"type"`
+	URL    string   `yaml:"url,omitempty" toml:"url"`
+	To     string   `yaml:"to,omitempty" toml:"to"`
+	Events []string `yaml:"events,omitempty" toml:"events"`
+}
+
+// NotificationsConfig holds notification settings.
+// Supports both simple (single webhook) and multi-channel formats.
+type NotificationsConfig struct {
+	Webhook  string                      `yaml:"webhook,omitempty" toml:"webhook"`
+	Channels []NotificationChannelConfig `yaml:"channels,omitempty" toml:"channels"`
+}
+
+// AssetsConfig holds asset bridging settings for zero-downtime static asset serving.
+type AssetsConfig struct {
+	Path     string `yaml:"path,omitempty" toml:"path"`           // container path, e.g. /app/public/assets
+	KeepDays int    `yaml:"keep_days,omitempty" toml:"keep_days"` // cleanup after N days (default 7)
+}
+
+// NetworkConfig holds cross-server VPN mesh configuration.
+type NetworkConfig struct {
+	Provider string `yaml:"provider,omitempty" toml:"provider"`
+	AuthKey  string `yaml:"auth_key,omitempty" toml:"auth_key"`
+	Server   string `yaml:"server,omitempty" toml:"server"`
+	SetupKey string `yaml:"setup_key,omitempty" toml:"setup_key"`
+}
+
+// AppConfig represents the teploy configuration (yml, yaml, or toml).
+type AppConfig struct {
+	App           string                     `yaml:"app" toml:"app"`
+	Domain        string                     `yaml:"domain" toml:"domain"`
+	Server        string                     `yaml:"server,omitempty" toml:"server"`
+	Servers       []string                   `yaml:"servers,omitempty" toml:"servers"`
+	Image         string                     `yaml:"image,omitempty" toml:"image"`
+	Port          int                        `yaml:"port,omitempty" toml:"port"`
+	Platform      string                     `yaml:"platform,omitempty" toml:"platform"`
+	BuildLocal    bool                       `yaml:"build_local,omitempty" toml:"build_local"`
+	StopTimeout   int                        `yaml:"stop_timeout,omitempty" toml:"stop_timeout"`
+	Parallel      int                        `yaml:"parallel,omitempty" toml:"parallel"`
+	Hooks         HooksConfig                `yaml:"hooks,omitempty" toml:"hooks"`
+	Volumes       map[string]string          `yaml:"volumes,omitempty" toml:"volumes"`
+	Processes     map[string]string          `yaml:"processes,omitempty" toml:"processes"`
+	Accessories   map[string]AccessoryConfig `yaml:"accessories,omitempty" toml:"accessories"`
+	Assets        AssetsConfig               `yaml:"assets,omitempty" toml:"assets"`
+	Notifications NotificationsConfig        `yaml:"notifications,omitempty" toml:"notifications"`
+	Network       NetworkConfig              `yaml:"network,omitempty" toml:"network"`
+}
+
+func (c *AppConfig) validate() error {
+	if c.App == "" {
+		return fmt.Errorf("'app' is required")
+	}
+	if !validName.MatchString(c.App) {
+		return fmt.Errorf("'app' must be lowercase alphanumeric with hyphens (got %q)", c.App)
+	}
+	if len(c.App) > 63 {
+		return fmt.Errorf("'app' name too long (max 63 chars, got %d)", len(c.App))
+	}
+	if c.Domain == "" {
+		return fmt.Errorf("'domain' is required")
+	}
+	if !validDomain.MatchString(c.Domain) {
+		return fmt.Errorf("'domain' contains invalid characters (got %q)", c.Domain)
+	}
+	if c.Platform != "" && !validPlatform.MatchString(c.Platform) {
+		return fmt.Errorf("'platform' must be os/arch (e.g. linux/amd64, linux/arm64), got %q", c.Platform)
+	}
+	for name := range c.Volumes {
+		if !validName.MatchString(name) {
+			return fmt.Errorf("volume name %q must be lowercase alphanumeric with hyphens", name)
+		}
+	}
+	for name := range c.Accessories {
+		if !validName.MatchString(name) {
+			return fmt.Errorf("accessory name %q must be lowercase alphanumeric with hyphens", name)
+		}
+	}
+	for name := range c.Processes {
+		if !validName.MatchString(name) {
+			return fmt.Errorf("process name %q must be lowercase alphanumeric with hyphens", name)
+		}
+	}
+	return nil
+}
+
+// LoadApp reads and parses teploy config (yml, yaml, or toml) from the given directory.
+func LoadApp(dir string) (*AppConfig, error) {
+	for _, name := range []string{"teploy.yml", "teploy.yaml", "teploy.toml"} {
+		path := filepath.Join(dir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var cfg AppConfig
+		if strings.HasSuffix(name, ".toml") {
+			if err := toml.Unmarshal(data, &cfg); err != nil {
+				return nil, fmt.Errorf("parsing %s: %w", name, err)
+			}
+		} else {
+			if err := yaml.Unmarshal(data, &cfg); err != nil {
+				return nil, fmt.Errorf("parsing %s: %w", name, err)
+			}
+		}
+		if err := cfg.validate(); err != nil {
+			return nil, fmt.Errorf("invalid %s: %w", name, err)
+		}
+		return &cfg, nil
+	}
+
+	// No teploy config — try docker-compose auto-detection.
+	composeCfg, err := LoadCompose(dir)
+	if err != nil {
+		return nil, err
+	}
+	if composeCfg != nil {
+		return composeCfg, nil
+	}
+
+	return nil, fmt.Errorf("no teploy.yml, teploy.toml, or docker-compose file found in %s", dir)
+}
+
+// LoadAppWithDestination loads the base config and merges a destination overlay on top.
+// For example, -d staging loads teploy.yml then merges teploy.staging.yml over it.
+func LoadAppWithDestination(dir, dest string) (*AppConfig, error) {
+	base, err := LoadApp(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try destination overlay files in order: yml, yaml, toml.
+	for _, ext := range []string{".yml", ".yaml", ".toml"} {
+		name := "teploy." + dest + ext
+		path := filepath.Join(dir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var overlay AppConfig
+		if ext == ".toml" {
+			if err := toml.Unmarshal(data, &overlay); err != nil {
+				return nil, fmt.Errorf("parsing %s: %w", name, err)
+			}
+		} else {
+			if err := yaml.Unmarshal(data, &overlay); err != nil {
+				return nil, fmt.Errorf("parsing %s: %w", name, err)
+			}
+		}
+
+		mergeConfigs(base, &overlay)
+		if err := base.validate(); err != nil {
+			return nil, fmt.Errorf("invalid config after merging %s: %w", name, err)
+		}
+		return base, nil
+	}
+
+	return nil, fmt.Errorf("destination %q not found — expected teploy.%s.yml or teploy.%s.toml", dest, dest, dest)
+}
+
+// mergeConfigs applies non-zero values from overlay onto base (mutates base).
+func mergeConfigs(base, overlay *AppConfig) {
+	if overlay.App != "" {
+		base.App = overlay.App
+	}
+	if overlay.Domain != "" {
+		base.Domain = overlay.Domain
+	}
+	if overlay.Server != "" {
+		base.Server = overlay.Server
+	}
+	if len(overlay.Servers) > 0 {
+		base.Servers = overlay.Servers
+	}
+	if overlay.Image != "" {
+		base.Image = overlay.Image
+	}
+	if overlay.Port != 0 {
+		base.Port = overlay.Port
+	}
+	if overlay.Platform != "" {
+		base.Platform = overlay.Platform
+	}
+	if overlay.BuildLocal {
+		base.BuildLocal = overlay.BuildLocal
+	}
+	if overlay.StopTimeout != 0 {
+		base.StopTimeout = overlay.StopTimeout
+	}
+	if overlay.Parallel != 0 {
+		base.Parallel = overlay.Parallel
+	}
+	if overlay.Hooks.PreDeploy != "" {
+		base.Hooks.PreDeploy = overlay.Hooks.PreDeploy
+	}
+	if overlay.Hooks.PostDeploy != "" {
+		base.Hooks.PostDeploy = overlay.Hooks.PostDeploy
+	}
+	// Merge maps: overlay keys override base keys.
+	if len(overlay.Volumes) > 0 {
+		if base.Volumes == nil {
+			base.Volumes = map[string]string{}
+		}
+		for k, v := range overlay.Volumes {
+			base.Volumes[k] = v
+		}
+	}
+	if len(overlay.Processes) > 0 {
+		if base.Processes == nil {
+			base.Processes = map[string]string{}
+		}
+		for k, v := range overlay.Processes {
+			base.Processes[k] = v
+		}
+	}
+	if len(overlay.Accessories) > 0 {
+		if base.Accessories == nil {
+			base.Accessories = map[string]AccessoryConfig{}
+		}
+		for k, v := range overlay.Accessories {
+			base.Accessories[k] = v
+		}
+	}
+	if overlay.Assets.Path != "" {
+		base.Assets = overlay.Assets
+	}
+	if overlay.Notifications.Webhook != "" {
+		base.Notifications.Webhook = overlay.Notifications.Webhook
+	}
+	if len(overlay.Notifications.Channels) > 0 {
+		base.Notifications.Channels = overlay.Notifications.Channels
+	}
+	if overlay.Network.Provider != "" {
+		base.Network = overlay.Network
+	}
+}
+
+// ParseAppBytes parses raw YAML bytes as an AppConfig.
+// Used by template deploy to parse fetched template content.
+func ParseAppBytes(data []byte) (*AppConfig, error) {
+	var cfg AppConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+	return &cfg, nil
+}

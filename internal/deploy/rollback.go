@@ -1,0 +1,126 @@
+package deploy
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/teploy/teploy/internal/caddy"
+	"github.com/teploy/teploy/internal/docker"
+	"github.com/teploy/teploy/internal/ssh"
+	"github.com/teploy/teploy/internal/state"
+)
+
+// RollbackConfig holds parameters for a rollback operation.
+type RollbackConfig struct {
+	App         string
+	Domain      string
+	StopTimeout int
+	Health      HealthConfig
+}
+
+// Rollback reverts to the previous deploy version.
+// Starts previous containers, health checks, re-routes traffic,
+// and stops current containers. Updates state so current ↔ previous swap.
+func Rollback(ctx context.Context, exec ssh.Executor, out io.Writer, cfg RollbackConfig) error {
+	start := time.Now()
+	dk := docker.NewClient(exec)
+	cd := caddy.NewClient(exec)
+	healthCfg := cfg.Health.withDefaults()
+
+	stopTimeout := cfg.StopTimeout
+	if stopTimeout == 0 {
+		stopTimeout = 10
+	}
+
+	// 1. Read state.
+	current, err := state.Read(ctx, exec, cfg.App)
+	if err != nil || current == nil {
+		return fmt.Errorf("no deploy state found for %s — deploy first", cfg.App)
+	}
+	if current.PreviousHash == "" {
+		return fmt.Errorf("no previous deploy to roll back to")
+	}
+	if current.PreviousPort == 0 {
+		return fmt.Errorf("previous deploy has no port — cannot roll back")
+	}
+
+	fmt.Fprintf(out, "Rolling back %s from %s to %s...\n", cfg.App, current.CurrentHash, current.PreviousHash)
+
+	// 2. Find and start previous containers.
+	containers, err := dk.ListContainers(ctx, cfg.App)
+	if err != nil {
+		return fmt.Errorf("listing containers: %w", err)
+	}
+
+	suffix := "-" + current.PreviousHash
+	var started []string
+	for _, c := range containers {
+		if strings.HasSuffix(c.Name, suffix) {
+			fmt.Fprintf(out, "Starting %s...\n", c.Name)
+			if err := dk.Start(ctx, c.Name); err != nil {
+				return fmt.Errorf("starting previous container %s: %w", c.Name, err)
+			}
+			started = append(started, c.Name)
+		}
+	}
+
+	if len(started) == 0 {
+		return fmt.Errorf("no previous containers found for version %s — they may have been removed", current.PreviousHash)
+	}
+
+	// 3. Health check on previous port.
+	fmt.Fprintln(out, "Running health check...")
+	deployer := &Deployer{exec: exec, out: out}
+	if err := deployer.healthCheck(ctx, current.PreviousPort, healthCfg); err != nil {
+		// Stop what we started and bail.
+		for _, name := range started {
+			dk.Stop(ctx, name, 5)
+		}
+		return fmt.Errorf("health check failed on previous version: %w", err)
+	}
+	fmt.Fprintln(out, "  Health check passed")
+
+	// 4. Route traffic to previous port.
+	fmt.Fprintln(out, "Updating routes...")
+	if err := cd.SetRoute(ctx, cfg.App, cfg.Domain, current.PreviousPort); err != nil {
+		return fmt.Errorf("updating route: %w", err)
+	}
+	fmt.Fprintln(out, "  Traffic routed to previous version")
+
+	// 5. Stop current containers.
+	currentSuffix := "-" + current.CurrentHash
+	for _, c := range containers {
+		if strings.HasSuffix(c.Name, currentSuffix) && c.State == "running" {
+			fmt.Fprintf(out, "Stopping %s...\n", c.Name)
+			dk.Stop(ctx, c.Name, stopTimeout)
+		}
+	}
+
+	// 6. Swap state: previous becomes current, current becomes previous.
+	newState := &state.AppState{
+		CurrentPort:  current.PreviousPort,
+		CurrentHash:  current.PreviousHash,
+		PreviousPort: current.CurrentPort,
+		PreviousHash: current.CurrentHash,
+	}
+	if err := state.Write(ctx, exec, cfg.App, newState); err != nil {
+		return fmt.Errorf("writing state: %w", err)
+	}
+
+	// 7. Log.
+	state.AppendLog(ctx, exec, state.LogEntry{
+		Timestamp:  time.Now().UTC(),
+		App:        cfg.App,
+		Type:       "rollback",
+		Hash:       current.PreviousHash,
+		Success:    true,
+		DurationMs: time.Since(start).Milliseconds(),
+	})
+
+	duration := time.Since(start)
+	fmt.Fprintf(out, "\nRolled back %s to version %s in %s\n", cfg.App, current.PreviousHash, duration.Round(time.Millisecond))
+	return nil
+}

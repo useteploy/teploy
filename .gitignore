@@ -1,0 +1,26 @@
+# Binary
+/teploy
+/cmd/teploy/teploy
+
+# Go
+*.exe
+*.test
+*.out
+*.prof
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reference repos (cloned for study, not part of the project)
+/reference/
+
+# Claude Code
+CLAUDE.md
