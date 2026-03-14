@@ -182,17 +182,19 @@
             <!-- Status -->
             <div class="card mb-4">
               <h3>Status</h3>
-              <div class="stat">
-                <span>Version</span>
-                <span class="mono" x-text="shortHash(status.version || '')"></span>
-              </div>
-              <div class="stat">
-                <span>Port</span>
-                <span x-text="status.port || '—'"></span>
-              </div>
-              <div class="stat">
-                <span>Containers</span>
-                <span x-text="containers.length"></span>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;">
+                <div style="padding: 8px 0; border-bottom: 1px solid var(--border-light);">
+                  <div style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px;">Version</div>
+                  <div class="mono" style="font-weight: 600;" x-text="shortHash(status.version || '—')"></div>
+                </div>
+                <div style="padding: 8px 0; border-bottom: 1px solid var(--border-light);">
+                  <div style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px;">Port</div>
+                  <div style="font-weight: 600;" x-text="status.port || '—'"></div>
+                </div>
+                <div style="padding: 8px 0; border-bottom: 1px solid var(--border-light);">
+                  <div style="font-size: 12px; color: var(--text-tertiary); margin-bottom: 4px;">Containers</div>
+                  <div style="font-weight: 600;" x-text="containers.length"></div>
+                </div>
               </div>
             </div>
 
@@ -310,7 +312,7 @@
               <h3>CPU</h3>
               <div class="stat">
                 <span>Load</span>
-                <span x-text="info.load_average || '—'"></span>
+                <span class="mono" x-text="info.load_average || '—'"></span>
               </div>
               <div class="stat">
                 <span>Uptime</span>
@@ -319,24 +321,34 @@
             </div>
             <div class="card">
               <h3>Memory</h3>
-              <div class="stat">
-                <span>Used</span>
-                <span x-text="info.memory_used || '—'"></span>
-              </div>
-              <div class="stat">
-                <span>Total</span>
-                <span x-text="info.memory_total || '—'"></span>
+              <div class="usage-bar">
+                <div class="usage-bar-label">
+                  <span>Usage</span>
+                  <span class="mono" :x-text="`${usagePercent(info.memory_used, info.memory_total)}%`"></span>
+                </div>
+                <div class="usage-bar-container">
+                  <div class="usage-bar-fill" :class="usageColor(usagePercent(info.memory_used, info.memory_total))" :style="`width: ${usagePercent(info.memory_used, info.memory_total)}%`"></div>
+                </div>
+                <div class="stat" style="padding: 4px 0; border: none;">
+                  <span x-text="info.memory_used || '—'"></span>
+                  <span x-text="info.memory_total || '—'"></span>
+                </div>
               </div>
             </div>
             <div class="card">
               <h3>Disk</h3>
-              <div class="stat">
-                <span>Used</span>
-                <span x-text="info.disk_used || '—'"></span>
-              </div>
-              <div class="stat">
-                <span>Total</span>
-                <span x-text="info.disk_total || '—'"></span>
+              <div class="usage-bar">
+                <div class="usage-bar-label">
+                  <span>Usage</span>
+                  <span class="mono" :x-text="`${usagePercent(info.disk_used, info.disk_total)}%`"></span>
+                </div>
+                <div class="usage-bar-container">
+                  <div class="usage-bar-fill" :class="usageColor(usagePercent(info.disk_used, info.disk_total))" :style="`width: ${usagePercent(info.disk_used, info.disk_total)}%`"></div>
+                </div>
+                <div class="stat" style="padding: 4px 0; border: none;">
+                  <span x-text="info.disk_used || '—'"></span>
+                  <span x-text="info.disk_total || '—'"></span>
+                </div>
               </div>
             </div>
           </div>
