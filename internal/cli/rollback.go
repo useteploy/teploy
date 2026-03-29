@@ -10,18 +10,29 @@ import (
 	"github.com/useteploy/teploy/internal/config"
 	"github.com/useteploy/teploy/internal/deploy"
 	"github.com/useteploy/teploy/internal/notify"
+	"github.com/useteploy/teploy/internal/ssh"
+	"github.com/useteploy/teploy/internal/state"
 )
 
 func newRollbackCmd(flags *Flags) *cobra.Command {
-	return &cobra.Command{
+	var appName string
+
+	cmd := &cobra.Command{
 		Use:   "rollback",
 		Short: "Roll back to the previous deploy",
 		Long:  "Start the previous version's containers, health check, re-route traffic, and stop the current containers.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if appName != "" {
+				return runRollbackByApp(flags, appName)
+			}
 			return runRollback(flags)
 		},
 	}
+
+	cmd.Flags().StringVar(&appName, "app", "", "app name — reads state from server instead of teploy.yml (requires --host)")
+
+	return cmd
 }
 
 func runRollback(flags *Flags) error {
@@ -63,4 +74,42 @@ func runRollback(flags *Flags) error {
 	}
 
 	return rollbackErr
+}
+
+// runRollbackByApp rolls back using server-side state instead of a local teploy.yml.
+// Used by teploy-ui and for running rollback outside of an app directory.
+func runRollbackByApp(flags *Flags, appName string) error {
+	if flags.Host == "" {
+		return fmt.Errorf("--host is required when using --app")
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	host, user, key, err := config.ResolveServer(flags.Host, flags.Host, flags.User, flags.Key)
+	if err != nil {
+		return err
+	}
+
+	executor, err := ssh.Connect(ctx, ssh.ConnectConfig{Host: host, User: user, KeyPath: key})
+	if err != nil {
+		return err
+	}
+	defer executor.Close()
+
+	appState, err := state.Read(ctx, executor, appName)
+	if err != nil {
+		return fmt.Errorf("reading state for %q: %w", appName, err)
+	}
+	if appState == nil {
+		return fmt.Errorf("no state found for app %q on %s — has it been deployed?", appName, host)
+	}
+	if appState.Domain == "" {
+		return fmt.Errorf("no domain in state for %q — redeploy once to update state", appName)
+	}
+
+	return deploy.Rollback(ctx, executor, os.Stdout, deploy.RollbackConfig{
+		App:    appName,
+		Domain: appState.Domain,
+	})
 }

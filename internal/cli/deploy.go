@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/useteploy/teploy/internal/accessories"
@@ -73,6 +74,14 @@ func runDeploy(flags *Flags, serverName, image, version string, skipDNSCheck boo
 		return runMultiDeploy(flags, appCfg, image, version, skipDNSCheck, parallel)
 	}
 
+	return deployAppConfig(flags, appCfg, serverName, image, version, skipDNSCheck)
+}
+
+// deployAppConfig runs a single-server deploy from an already-loaded AppConfig.
+// Used by both runDeploy (from teploy.yml) and runTemplateInstall (from template).
+func deployAppConfig(flags *Flags, appCfg *config.AppConfig, serverName, image, version string, skipDNSCheck bool) error {
+	var err error
+
 	// 2. Resolve server (single-server deploy).
 	if serverName == "" {
 		// If there's exactly one server in the servers list, use it.
@@ -100,7 +109,12 @@ func runDeploy(flags *Flags, serverName, image, version string, skipDNSCheck boo
 	if version == "" {
 		version, err = gitShortHash()
 		if err != nil {
-			return fmt.Errorf("could not determine version from git: %w (use --version flag)", err)
+			if image != "" {
+				// Pre-built image with no git repo — use a timestamp.
+				version = fmt.Sprintf("%d", time.Now().Unix())
+			} else {
+				return fmt.Errorf("could not determine version from git: %w (use --version flag)", err)
+			}
 		}
 	}
 
@@ -258,6 +272,7 @@ func runDeploy(flags *Flags, serverName, image, version string, skipDNSCheck boo
 		Processes:     appCfg.Processes,
 		ContainerPort: appCfg.Port,
 		StopTimeout:   appCfg.StopTimeout,
+		Replicas:      appCfg.Replicas,
 		PreDeploy:     appCfg.Hooks.PreDeploy,
 		PostDeploy:    appCfg.Hooks.PostDeploy,
 		AssetPath:     appCfg.Assets.Path,

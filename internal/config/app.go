@@ -75,6 +75,7 @@ type AppConfig struct {
 	BuildLocal    bool                       `yaml:"build_local,omitempty" toml:"build_local"`
 	StopTimeout   int                        `yaml:"stop_timeout,omitempty" toml:"stop_timeout"`
 	Parallel      int                        `yaml:"parallel,omitempty" toml:"parallel"`
+	Replicas      int                        `yaml:"replicas,omitempty" toml:"replicas"`
 	Hooks         HooksConfig                `yaml:"hooks,omitempty" toml:"hooks"`
 	Volumes       map[string]string          `yaml:"volumes,omitempty" toml:"volumes"`
 	Processes     map[string]string          `yaml:"processes,omitempty" toml:"processes"`

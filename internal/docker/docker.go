@@ -34,11 +34,21 @@ type RunConfig struct {
 	Cmd           string            // command override (appended after image)
 	Memory        string            // memory limit, e.g. "512m"
 	CPU           string            // CPU limit, e.g. "1.0"
+	Name          string            // explicit container name (overrides auto-generated)
 }
 
 // ContainerName returns the standard teploy container name: {app}-{process}-{version}.
 func ContainerName(app, process, version string) string {
 	return app + "-" + process + "-" + version
+}
+
+// ReplicaContainerName returns a replica-indexed container name: {app}-{process}-{version}-{index}.
+// Index is 1-based. If index is 0 or 1 with total replicas=1, falls back to standard name.
+func ReplicaContainerName(app, process, version string, index, total int) string {
+	if total <= 1 {
+		return ContainerName(app, process, version)
+	}
+	return fmt.Sprintf("%s-%s-%s-%d", app, process, version, index)
 }
 
 // Client executes Docker commands on a remote server via SSH.
@@ -57,7 +67,10 @@ func (c *Client) Run(ctx context.Context, cfg RunConfig) (string, error) {
 		return "", fmt.Errorf("run config requires app, process, version, and image")
 	}
 
-	name := ContainerName(cfg.App, cfg.Process, cfg.Version)
+	name := cfg.Name
+	if name == "" {
+		name = ContainerName(cfg.App, cfg.Process, cfg.Version)
+	}
 
 	args := []string{
 		"docker", "run", "--detach",

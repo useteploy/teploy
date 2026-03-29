@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/useteploy/teploy/internal/config"
@@ -20,6 +21,7 @@ func newTemplateCmd(flags *Flags) *cobra.Command {
 	cmd.AddCommand(newTemplateListCmd(flags))
 	cmd.AddCommand(newTemplateInfoCmd(flags))
 	cmd.AddCommand(newTemplateDeployCmd(flags))
+	cmd.AddCommand(newTemplateInstallCmd(flags))
 
 	return cmd
 }
@@ -139,6 +141,66 @@ func runTemplateDeploy(flags *Flags, name, domain, server string) error {
 	}
 	fmt.Println("\nRun 'teploy deploy' to deploy this template.")
 	return nil
+}
+
+func newTemplateInstallCmd(flags *Flags) *cobra.Command {
+	var domain, server string
+	var vars []string
+
+	cmd := &cobra.Command{
+		Use:   "install <name>",
+		Short: "Fetch a template and deploy it in one step",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if domain == "" {
+				return fmt.Errorf("--domain is required")
+			}
+			if server == "" {
+				return fmt.Errorf("--server is required")
+			}
+			return runTemplateInstall(flags, args[0], domain, server, vars)
+		},
+	}
+
+	cmd.Flags().StringVar(&domain, "domain", "", "domain for the app (required)")
+	cmd.Flags().StringVar(&server, "server", "", "server to deploy to (required)")
+	cmd.Flags().StringArrayVar(&vars, "var", nil, "extra template variables as key=value")
+
+	return cmd
+}
+
+func runTemplateInstall(flags *Flags, name, domain, server string, extraVars []string) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	vars := map[string]string{"domain": domain}
+	for _, v := range extraVars {
+		parts := strings.SplitN(v, "=", 2)
+		if len(parts) == 2 {
+			vars[parts[0]] = parts[1]
+		}
+	}
+
+	reg := tmpl.NewRegistry()
+	content, err := reg.Fetch(ctx, name, vars)
+	if err != nil {
+		return err
+	}
+
+	appCfg, err := config.ParseAppBytes([]byte(content))
+	if err != nil {
+		return fmt.Errorf("invalid template: %w", err)
+	}
+
+	appCfg.Domain = domain
+	appCfg.Server = server
+
+	fmt.Printf("Installing template %q\n", name)
+	fmt.Printf("  App:    %s\n", appCfg.App)
+	fmt.Printf("  Domain: %s\n", domain)
+	fmt.Printf("  Server: %s\n", server)
+
+	return deployAppConfig(flags, appCfg, server, appCfg.Image, "", false)
 }
 
 func joinStrings(ss []string) string {

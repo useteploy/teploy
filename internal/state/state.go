@@ -17,10 +17,15 @@ const deploymentsDir = "/deployments"
 // AppState represents the deploy state for an app on the server.
 // Stored at /deployments/<app>/state as key=value pairs.
 type AppState struct {
-	CurrentPort  int
+	CurrentPort  int    // primary port (first replica or single instance)
 	CurrentHash  string
 	PreviousPort int
 	PreviousHash string
+	Domain       string
+	// Replica ports. When len > 1, the app has multiple replicas on this server.
+	// CurrentPort is always CurrentPorts[0] for backwards compatibility.
+	CurrentPorts  []int
+	PreviousPorts []int
 }
 
 // LogEntry represents a single entry in /deployments/teploy.log.
@@ -61,19 +66,63 @@ func Read(ctx context.Context, exec ssh.Executor, app string) (*AppState, error)
 			s.PreviousPort, _ = strconv.Atoi(parts[1])
 		case "previous_hash":
 			s.PreviousHash = parts[1]
+		case "domain":
+			s.Domain = parts[1]
+		case "current_ports":
+			s.CurrentPorts = parsePorts(parts[1])
+		case "previous_ports":
+			s.PreviousPorts = parsePorts(parts[1])
 		}
+	}
+	// Backwards compat: if CurrentPorts not set, derive from CurrentPort.
+	if len(s.CurrentPorts) == 0 && s.CurrentPort > 0 {
+		s.CurrentPorts = []int{s.CurrentPort}
+	}
+	if len(s.PreviousPorts) == 0 && s.PreviousPort > 0 {
+		s.PreviousPorts = []int{s.PreviousPort}
 	}
 	return s, nil
 }
 
+// parsePorts parses a comma-separated list of ports.
+func parsePorts(s string) []int {
+	var ports []int
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			ports = append(ports, n)
+		}
+	}
+	return ports
+}
+
+// formatPorts formats a port slice as comma-separated string.
+func formatPorts(ports []int) string {
+	parts := make([]string, len(ports))
+	for i, p := range ports {
+		parts[i] = strconv.Itoa(p)
+	}
+	return strings.Join(parts, ",")
+}
+
 // Write writes the app state to the server atomically via upload.
 func Write(ctx context.Context, exec ssh.Executor, app string, s *AppState) error {
-	content := fmt.Sprintf(
-		"current_port=%d\ncurrent_hash=%s\nprevious_port=%d\nprevious_hash=%s\n",
-		s.CurrentPort, s.CurrentHash, s.PreviousPort, s.PreviousHash,
-	)
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "current_port=%d\n", s.CurrentPort)
+	fmt.Fprintf(&buf, "current_hash=%s\n", s.CurrentHash)
+	fmt.Fprintf(&buf, "previous_port=%d\n", s.PreviousPort)
+	fmt.Fprintf(&buf, "previous_hash=%s\n", s.PreviousHash)
+	if s.Domain != "" {
+		fmt.Fprintf(&buf, "domain=%s\n", s.Domain)
+	}
+	if len(s.CurrentPorts) > 1 {
+		fmt.Fprintf(&buf, "current_ports=%s\n", formatPorts(s.CurrentPorts))
+	}
+	if len(s.PreviousPorts) > 1 {
+		fmt.Fprintf(&buf, "previous_ports=%s\n", formatPorts(s.PreviousPorts))
+	}
 	path := fmt.Sprintf("%s/%s/state", deploymentsDir, app)
-	return exec.Upload(ctx, strings.NewReader(content), path, "0644")
+	return exec.Upload(ctx, &buf, path, "0644")
 }
 
 // LockInfo represents the metadata stored in a .lock directory.

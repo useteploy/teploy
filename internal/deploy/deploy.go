@@ -29,6 +29,7 @@ type Config struct {
 	CPU           string
 	ContainerPort int // internal container port (default 80)
 	StopTimeout   int // graceful shutdown seconds (default 10)
+	Replicas      int // web process replicas per server (default 1)
 	Health      HealthConfig
 	PreDeploy   string // hook: runs in web container before traffic switch (failure aborts)
 	PostDeploy  string // hook: runs in web container after traffic switch (failure warns)
@@ -74,11 +75,19 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 		processes = map[string]string{"web": cfg.Cmd}
 	}
 
+	replicas := cfg.Replicas
+	if replicas <= 0 {
+		replicas = 1
+	}
+
 	start := time.Now()
-	webContainerName := docker.ContainerName(cfg.App, "web", cfg.Version)
 
 	// 1. Ensure app directory exists.
-	fmt.Fprintf(d.out, "Deploying %s (version %s)...\n", cfg.App, cfg.Version)
+	if replicas > 1 {
+		fmt.Fprintf(d.out, "Deploying %s (version %s, %d replicas)...\n", cfg.App, cfg.Version, replicas)
+	} else {
+		fmt.Fprintf(d.out, "Deploying %s (version %s)...\n", cfg.App, cfg.Version)
+	}
 	if err := state.EnsureAppDir(ctx, d.exec, cfg.App); err != nil {
 		return fmt.Errorf("creating app directory: %w", err)
 	}
@@ -92,13 +101,18 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 	// 3. Read current state.
 	current, _ := state.Read(ctx, d.exec, cfg.App)
 
-	// 4. Allocate port (for web process).
-	fmt.Fprintln(d.out, "Allocating port...")
-	port, err := d.docker.FindAvailablePort(ctx)
-	if err != nil {
-		return fmt.Errorf("allocating port: %w", err)
+	// 4. Allocate ports for all web replicas.
+	fmt.Fprintf(d.out, "Allocating %d port(s)...\n", replicas)
+	ports := make([]int, replicas)
+	for i := 0; i < replicas; i++ {
+		port, err := d.docker.FindAvailablePort(ctx)
+		if err != nil {
+			return fmt.Errorf("allocating port %d/%d: %w", i+1, replicas, err)
+		}
+		ports[i] = port
 	}
-	fmt.Fprintf(d.out, "  Port %d allocated\n", port)
+	port := ports[0] // primary port for health check, hooks, etc.
+	fmt.Fprintf(d.out, "  Ports allocated: %v\n", ports)
 
 	// 5. Asset bridging: extract assets from image before starting the container.
 	if cfg.AssetPath != "" {
@@ -129,6 +143,11 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 	// 6. Handle same-version redeploy: rename existing containers to avoid name conflicts.
 	if current != nil && current.CurrentHash == cfg.Version {
 		for _, process := range sortedProcessNames(processes) {
+			for ri := 1; ri <= replicas; ri++ {
+				name := docker.ReplicaContainerName(cfg.App, process, cfg.Version, ri, replicas)
+				d.exec.Run(ctx, fmt.Sprintf("docker rename %s %s 2>/dev/null", name, name+"_replaced"))
+			}
+			// Also rename the non-indexed name (from pre-replica deploys).
 			name := docker.ContainerName(cfg.App, process, cfg.Version)
 			d.exec.Run(ctx, fmt.Sprintf("docker rename %s %s 2>/dev/null", name, name+"_replaced"))
 		}
@@ -136,28 +155,37 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 
 	// Track started containers for cleanup on failure.
 	var started []string
+	webContainerNames := make([]string, replicas)
 
-	// 6. Start web container.
-	fmt.Fprintf(d.out, "Starting container %s...\n", webContainerName)
-	containerID, err := d.docker.Run(ctx, docker.RunConfig{
-		App:           cfg.App,
-		Process:       "web",
-		Version:       cfg.Version,
-		Image:         cfg.Image,
-		Port:          port,
-		ContainerPort: cfg.ContainerPort,
-		EnvFile:       cfg.EnvFile,
-		Env:           cfg.Env,
-		Volumes:       cfg.Volumes,
-		Cmd:           processes["web"],
-		Memory:        cfg.Memory,
-		CPU:           cfg.CPU,
-	})
-	if err != nil {
-		return fmt.Errorf("starting container: %w", err)
+	// 6. Start web container(s).
+	for i := 0; i < replicas; i++ {
+		name := docker.ReplicaContainerName(cfg.App, "web", cfg.Version, i+1, replicas)
+		webContainerNames[i] = name
+		fmt.Fprintf(d.out, "Starting container %s (port %d)...\n", name, ports[i])
+		containerID, err := d.docker.Run(ctx, docker.RunConfig{
+			App:           cfg.App,
+			Process:       "web",
+			Version:       cfg.Version,
+			Image:         cfg.Image,
+			Port:          ports[i],
+			ContainerPort: cfg.ContainerPort,
+			EnvFile:       cfg.EnvFile,
+			Env:           cfg.Env,
+			Volumes:       cfg.Volumes,
+			Cmd:           processes["web"],
+			Memory:        cfg.Memory,
+			CPU:           cfg.CPU,
+			Name:          name,
+		})
+		if err != nil {
+			return fmt.Errorf("starting container %s: %w", name, err)
+		}
+		started = append(started, name)
+		fmt.Fprintf(d.out, "  Container %s started\n", containerID[:min(12, len(containerID))])
 	}
-	started = append(started, webContainerName)
-	fmt.Fprintf(d.out, "  Container %s started\n", containerID[:min(12, len(containerID))])
+
+	// Primary web container (first replica) used for hooks.
+	webContainerName := webContainerNames[0]
 
 	// From here on, failures must clean up all started containers.
 	fail := func(reason error) error {
@@ -165,23 +193,26 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 		if logs != "" {
 			fmt.Fprintf(d.out, "\n--- Container logs ---\n%s\n--- End logs ---\n", logs)
 		}
-		for _, name := range started {
-			d.docker.Stop(ctx, name, 5)
-			d.docker.Remove(ctx, name)
+		for _, n := range started {
+			d.docker.Stop(ctx, n, 5)
+			d.docker.Remove(ctx, n)
 		}
 		d.logDeploy(ctx, cfg, false, start)
 		return reason
 	}
 
-	// 7. Verify web container is running (catch immediate crashes).
-	statusOut, err := d.exec.Run(ctx, fmt.Sprintf(
-		"docker inspect -f '{{.State.Status}}' %s", webContainerName,
-	))
-	if err != nil || strings.TrimSpace(statusOut) != "running" {
-		return fail(fmt.Errorf("container failed to start (status: %s)", strings.TrimSpace(statusOut)))
+	// 7. Verify all web containers are running (catch immediate crashes).
+	for i, name := range webContainerNames {
+		statusOut, err := d.exec.Run(ctx, fmt.Sprintf(
+			"docker inspect -f '{{.State.Status}}' %s", name,
+		))
+		if err != nil || strings.TrimSpace(statusOut) != "running" {
+			return fail(fmt.Errorf("container failed to start (status: %s, name: %s)", strings.TrimSpace(statusOut), name))
+		}
+		_ = i
 	}
 
-	// 8. Pre-deploy hook (runs in web container before health check and traffic switch).
+	// 8. Pre-deploy hook (runs in primary web container before health check).
 	if cfg.PreDeploy != "" {
 		fmt.Fprintf(d.out, "Running pre-deploy hook...\n")
 		if output, err := d.docker.Exec(ctx, webContainerName, cfg.PreDeploy); err != nil {
@@ -193,16 +224,22 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 		fmt.Fprintln(d.out, "  Pre-deploy hook passed")
 	}
 
-	// 9. Health check (web process only).
+	// 9. Health check all web replicas.
 	fmt.Fprintln(d.out, "Running health check...")
 	healthCfg := cfg.Health.withDefaults()
-	if err := d.healthCheck(ctx, port, healthCfg); err != nil {
-		fmt.Fprintf(d.out, "  Health check failed: %v\n", err)
-		return fail(fmt.Errorf("health check failed: %w", err))
+	for i, p := range ports {
+		if err := d.healthCheck(ctx, p, healthCfg); err != nil {
+			fmt.Fprintf(d.out, "  Health check failed for replica %d (port %d): %v\n", i+1, p, err)
+			return fail(fmt.Errorf("health check failed for replica %d: %w", i+1, err))
+		}
 	}
-	fmt.Fprintln(d.out, "  Health check passed")
+	if replicas > 1 {
+		fmt.Fprintf(d.out, "  All %d replicas healthy\n", replicas)
+	} else {
+		fmt.Fprintln(d.out, "  Health check passed")
+	}
 
-	// 10. Start non-web process containers (workers, etc.).
+	// 10. Start non-web process containers (workers, etc. — no replicas, one each).
 	for _, process := range sortedProcessNames(processes) {
 		if process == "web" {
 			continue
@@ -228,12 +265,24 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 		started = append(started, name)
 	}
 
-	// 11. Update Caddy route to point at new web container.
+	// 11. Update Caddy route to point at new web container(s).
 	fmt.Fprintln(d.out, "Updating routes...")
-	if err := d.caddy.SetRoute(ctx, cfg.App, cfg.Domain, port); err != nil {
-		return fail(fmt.Errorf("updating route: %w", err))
+	if replicas > 1 {
+		// Multiple replicas: use load balancer with all upstream ports.
+		upstreams := make([]caddy.Upstream, replicas)
+		for i, p := range ports {
+			upstreams[i] = caddy.Upstream{Dial: fmt.Sprintf("localhost:%d", p)}
+		}
+		if err := d.caddy.SetLoadBalancer(ctx, cfg.App, cfg.Domain, upstreams); err != nil {
+			return fail(fmt.Errorf("updating load balancer route: %w", err))
+		}
+		fmt.Fprintf(d.out, "  Traffic load-balanced across %d replicas\n", replicas)
+	} else {
+		if err := d.caddy.SetRoute(ctx, cfg.App, cfg.Domain, port); err != nil {
+			return fail(fmt.Errorf("updating route: %w", err))
+		}
+		fmt.Fprintln(d.out, "  Traffic routed to new container")
 	}
-	fmt.Fprintln(d.out, "  Traffic routed to new container")
 
 	// 12. Post-deploy hook (runs in web container after traffic switch — failure warns, no rollback).
 	if cfg.PostDeploy != "" {
@@ -250,11 +299,14 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 
 	// 13. Write new state.
 	newState := &state.AppState{
-		CurrentPort: port,
-		CurrentHash: cfg.Version,
+		CurrentPort:  port,
+		CurrentPorts: ports,
+		CurrentHash:  cfg.Version,
+		Domain:       cfg.Domain,
 	}
 	if current != nil {
 		newState.PreviousPort = current.CurrentPort
+		newState.PreviousPorts = current.CurrentPorts
 		newState.PreviousHash = current.CurrentHash
 	}
 	stateErr := state.Write(ctx, d.exec, cfg.App, newState)
@@ -262,10 +314,34 @@ func (d *Deployer) Deploy(ctx context.Context, cfg Config) error {
 		fmt.Fprintf(d.out, "Warning: writing state failed: %v\n", stateErr)
 	}
 
-	// 14. Stop old containers (all processes) — proceed even if state write failed,
-	// since traffic is already routed to the new container.
+	// 14. Stop old containers (all processes + all replicas).
 	if current != nil && current.CurrentHash != "" {
+		// Stop old web replicas.
+		oldReplicas := len(current.CurrentPorts)
+		if oldReplicas == 0 {
+			oldReplicas = 1
+		}
+		for ri := 1; ri <= oldReplicas; ri++ {
+			oldName := docker.ReplicaContainerName(cfg.App, "web", current.CurrentHash, ri, oldReplicas)
+			if current.CurrentHash == cfg.Version {
+				oldName += "_replaced"
+			}
+			fmt.Fprintf(d.out, "Stopping old container %s...\n", oldName)
+			d.docker.Stop(ctx, oldName, stopTimeout)
+		}
+		// Also stop non-indexed name (from pre-replica deploys).
+		if oldReplicas <= 1 {
+			oldName := docker.ContainerName(cfg.App, "web", current.CurrentHash)
+			if current.CurrentHash == cfg.Version {
+				oldName += "_replaced"
+			}
+			d.docker.Stop(ctx, oldName, stopTimeout)
+		}
+		// Stop old worker processes (always 1 per type).
 		for _, process := range sortedProcessNames(processes) {
+			if process == "web" {
+				continue
+			}
 			oldName := docker.ContainerName(cfg.App, process, current.CurrentHash)
 			if current.CurrentHash == cfg.Version {
 				oldName += "_replaced"

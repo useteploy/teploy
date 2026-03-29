@@ -133,6 +133,7 @@ func (s *singleServerDeployer) deployApp(ctx context.Context, appCfg *config.App
 		Processes:     appCfg.Processes,
 		ContainerPort: appCfg.Port,
 		StopTimeout:   appCfg.StopTimeout,
+		Replicas:      appCfg.Replicas,
 		PreDeploy:     appCfg.Hooks.PreDeploy,
 		PostDeploy:    appCfg.Hooks.PostDeploy,
 		AssetPath:     appCfg.Assets.Path,
