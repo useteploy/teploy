@@ -229,11 +229,6 @@ func TestHarden_RunsAllSteps_AsRoot(t *testing.T) {
 		ssh.MockCommand{Match: "sed -i", Output: ""},
 		ssh.MockCommand{Match: "sed -i", Output: ""},
 		ssh.MockCommand{Match: "systemctl restart sshd", Output: ""},
-		// Auto-updates
-		ssh.MockCommand{Match: "which unattended-upgrades", Output: "/usr/bin/unattended-upgrades"},
-		ssh.MockCommand{Match: "UPLOAD:", Output: ""},
-		ssh.MockCommand{Match: "mv /tmp/teploy-auto-upgrades.conf", Output: ""},
-		ssh.MockCommand{Match: "systemctl enable --now unattended-upgrades", Output: ""},
 	)
 
 	var buf bytes.Buffer
@@ -250,9 +245,6 @@ func TestHarden_RunsAllSteps_AsRoot(t *testing.T) {
 	}
 	if !strings.Contains(output, "Hardening SSH") {
 		t.Error("should include SSH step")
-	}
-	if !strings.Contains(output, "Auto security updates enabled") {
-		t.Error("should include auto-updates step")
 	}
 }
 
@@ -278,11 +270,6 @@ func TestHarden_RunsAllSteps_WithSudo(t *testing.T) {
 		ssh.MockCommand{Match: "sudo sed -i", Output: ""},
 		ssh.MockCommand{Match: "sudo sed -i", Output: ""},
 		ssh.MockCommand{Match: "sudo systemctl restart sshd", Output: ""},
-		// Auto-updates
-		ssh.MockCommand{Match: "which unattended-upgrades", Output: "/usr/bin/unattended-upgrades"},
-		ssh.MockCommand{Match: "UPLOAD:", Output: ""},
-		ssh.MockCommand{Match: "sudo mv /tmp/teploy-auto-upgrades.conf", Output: ""},
-		ssh.MockCommand{Match: "sudo systemctl enable --now unattended-upgrades", Output: ""},
 	)
 
 	var buf bytes.Buffer

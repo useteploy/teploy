@@ -147,7 +147,10 @@ APT::Periodic::Unattended-Upgrade "1";
 	return nil
 }
 
-// Harden runs all hardening steps in order: UFW, fail2ban, SSH, auto-updates.
+// Harden runs all hardening steps in order: UFW, fail2ban, SSH.
+// Auto-updates is intentionally excluded — it should run last (after all
+// other apt installs complete) to avoid locking conflicts.
+// Call EnableAutoUpdates separately at the end of setup.
 // Detects sudo once and passes it to all sub-functions.
 // Idempotent — safe to run multiple times.
 func Harden(ctx context.Context, exec ssh.Executor, w io.Writer) error {
@@ -160,9 +163,6 @@ func Harden(ctx context.Context, exec ssh.Executor, w io.Writer) error {
 		return err
 	}
 	if err := HardenSSH(ctx, exec, w, sudo); err != nil {
-		return err
-	}
-	if err := EnableAutoUpdates(ctx, exec, w, sudo); err != nil {
 		return err
 	}
 	return nil

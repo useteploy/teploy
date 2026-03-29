@@ -191,6 +191,18 @@ echo '%s' | su -c 'apt-get update -qq && apt-get install -y -qq sudo >/dev/null 
 		}
 	}
 
+	// Enable auto security updates last — after all apt installs are done.
+	// This prevents unattended-upgrades from locking apt during setup.
+	if !noHarden {
+		sudo := ""
+		if w, _ := executor.Run(ctx, "whoami"); strings.TrimSpace(w) != "root" {
+			sudo = "sudo "
+		}
+		if err := harden.EnableAutoUpdates(ctx, executor, os.Stdout, sudo); err != nil {
+			return err
+		}
+	}
+
 	// Add to servers.yml — use VPN IP as host if available (LAN may become unreachable after VPN setup).
 	serverHost := host
 	if vpnIP != "" {
