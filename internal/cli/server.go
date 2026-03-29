@@ -54,7 +54,7 @@ func newServerAddCmd(flags *Flags) *cobra.Command {
 				return fmt.Errorf("determining servers path: %w", err)
 			}
 
-			if err := config.AddServer(path, name, host, user, role); err != nil {
+			if err := config.AddServer(path, name, host, user, role, ""); err != nil {
 				return fmt.Errorf("adding server: %w", err)
 			}
 

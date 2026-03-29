@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/useteploy/teploy/internal/build"
@@ -22,11 +24,14 @@ type validationResult struct {
 
 func newValidateCmd(flags *Flags) *cobra.Command {
 	return &cobra.Command{
-		Use:   "validate",
+		Use:   "validate [server-name]",
 		Short: "Check config and server readiness",
-		Long:  "Validate teploy.yml, check server connectivity, Docker, build prerequisites, and DNS.",
-		Args:  cobra.NoArgs,
+		Long:  "Validate teploy.yml, check server connectivity, Docker, build prerequisites, and DNS.\nIf a server name is given, report detailed server security and service status.",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 {
+				return runValidateServer(flags, args[0])
+			}
 			return runValidate(flags)
 		},
 	}
@@ -95,6 +100,159 @@ func runValidate(flags *Flags) error {
 	}
 
 	return outputResult(flags, result)
+}
+
+// runValidateServer connects to a named server and reports detailed status.
+func runValidateServer(flags *Flags, serverName string) error {
+	host, user, key, err := config.ResolveServer(serverName, flags.Host, flags.User, flags.Key)
+	if err != nil {
+		return fmt.Errorf("resolving server %q: %w", serverName, err)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	exec, err := ssh.Connect(ctx, ssh.ConnectConfig{
+		Host:    host,
+		User:    user,
+		KeyPath: key,
+	})
+	if err != nil {
+		return fmt.Errorf("connecting to %s: %w", serverName, err)
+	}
+	defer exec.Close()
+
+	validateServerStatus(ctx, exec, os.Stdout)
+	return nil
+}
+
+// validateServerStatus checks all services and security settings on a connected server.
+// Separated from runValidateServer for testability with MockExecutor.
+func validateServerStatus(ctx context.Context, exec ssh.Executor, w io.Writer) {
+	// Docker
+	if out, err := exec.Run(ctx, "docker --version"); err == nil {
+		ver := strings.TrimPrefix(strings.TrimSpace(out), "Docker version ")
+		if idx := strings.Index(ver, ","); idx != -1 {
+			ver = ver[:idx]
+		}
+		fmt.Fprintf(w, "%-16sInstalled (%s)\n", "Docker", ver)
+	} else {
+		fmt.Fprintf(w, "%-16sNot installed\n", "Docker")
+	}
+
+	// Caddy
+	if out, err := exec.Run(ctx, "docker ps --filter name=^caddy$ --format '{{.Status}}'"); err == nil && strings.TrimSpace(out) != "" {
+		fmt.Fprintf(w, "%-16sRunning\n", "Caddy")
+	} else {
+		fmt.Fprintf(w, "%-16sNot running\n", "Caddy")
+	}
+
+	// UFW
+	if out, err := exec.Run(ctx, "ufw status"); err == nil {
+		if strings.Contains(out, "Status: active") {
+			if strings.Contains(out, "deny") {
+				fmt.Fprintf(w, "%-16sActive, default deny\n", "UFW")
+			} else {
+				fmt.Fprintf(w, "%-16sActive\n", "UFW")
+			}
+		} else {
+			fmt.Fprintf(w, "%-16sInactive\n", "UFW")
+		}
+	} else {
+		fmt.Fprintf(w, "%-16sNot installed\n", "UFW")
+	}
+
+	// SSH Key Auth
+	if out, err := exec.Run(ctx, "grep -E '^PubkeyAuthentication' /etc/ssh/sshd_config"); err == nil {
+		if strings.Contains(out, "yes") {
+			fmt.Fprintf(w, "%-16sEnabled\n", "SSH Key Auth")
+		} else {
+			fmt.Fprintf(w, "%-16sDisabled\n", "SSH Key Auth")
+		}
+	} else {
+		fmt.Fprintf(w, "%-16sUnknown\n", "SSH Key Auth")
+	}
+
+	// Password Auth
+	if out, err := exec.Run(ctx, "grep -E '^PasswordAuthentication' /etc/ssh/sshd_config"); err == nil {
+		if strings.Contains(out, "no") {
+			fmt.Fprintf(w, "%-16sDisabled\n", "Password Auth")
+		} else {
+			fmt.Fprintf(w, "%-16sEnabled\n", "Password Auth")
+		}
+	} else {
+		fmt.Fprintf(w, "%-16sUnknown\n", "Password Auth")
+	}
+
+	// Fail2ban
+	if out, err := exec.Run(ctx, "systemctl is-active fail2ban && fail2ban-client status sshd"); err == nil {
+		if strings.Contains(out, "active") {
+			fmt.Fprintf(w, "%-16sActive, SSH protected\n", "Fail2ban")
+		} else {
+			fmt.Fprintf(w, "%-16s%s\n", "Fail2ban", splitFirstLine(strings.TrimSpace(out)))
+		}
+	} else {
+		fmt.Fprintf(w, "%-16sNot installed\n", "Fail2ban")
+	}
+
+	// VPN — auto-detect
+	vpnPrinted := false
+	if out, err := exec.Run(ctx, "tailscale status"); err == nil {
+		_ = out
+		if ip, ipErr := exec.Run(ctx, "tailscale ip -4"); ipErr == nil {
+			fmt.Fprintf(w, "%-16sConnected (%s)\n", "Tailscale", strings.TrimSpace(ip))
+		} else {
+			fmt.Fprintf(w, "%-16sInstalled\n", "Tailscale")
+		}
+		vpnPrinted = true
+	}
+	if !vpnPrinted {
+		if out, err := exec.Run(ctx, "netbird status"); err == nil {
+			if strings.Contains(out, "Connected") {
+				for _, line := range strings.Split(out, "\n") {
+					trimmed := strings.TrimSpace(line)
+					if strings.HasPrefix(trimmed, "NetBird IP:") || strings.HasPrefix(trimmed, "IP:") {
+						parts := strings.Fields(trimmed)
+						if len(parts) >= 2 {
+							ip := parts[len(parts)-1]
+							if idx := strings.Index(ip, "/"); idx != -1 {
+								ip = ip[:idx]
+							}
+							fmt.Fprintf(w, "%-16sConnected (%s)\n", "Netbird", ip)
+							vpnPrinted = true
+							break
+						}
+					}
+				}
+				if !vpnPrinted {
+					fmt.Fprintf(w, "%-16sConnected\n", "Netbird")
+					vpnPrinted = true
+				}
+			} else {
+				fmt.Fprintf(w, "%-16s%s\n", "Netbird", splitFirstLine(strings.TrimSpace(out)))
+				vpnPrinted = true
+			}
+		}
+	}
+	if !vpnPrinted {
+		fmt.Fprintf(w, "%-16sNot installed\n", "VPN")
+	}
+
+	// Disk
+	if out, err := exec.Run(ctx, "df -h / --output=size,used,avail,pcent | tail -1"); err == nil {
+		fields := strings.Fields(strings.TrimSpace(out))
+		if len(fields) >= 4 {
+			fmt.Fprintf(w, "%-16s%s (%s used)\n", "Disk", fields[0], fields[3])
+		}
+	}
+
+	// Memory
+	if out, err := exec.Run(ctx, "free -h | grep Mem | awk '{print $2, $3}'"); err == nil {
+		fields := strings.Fields(strings.TrimSpace(out))
+		if len(fields) >= 2 {
+			fmt.Fprintf(w, "%-16s%s total, %s used\n", "Memory", fields[0], fields[1])
+		}
+	}
 }
 
 func outputResult(flags *Flags, result *validationResult) error {

@@ -5,33 +5,54 @@ import (
 	"fmt"
 	"io"
 	"os"
+	osexec "os/exec"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/harden"
+	"github.com/useteploy/teploy/internal/network"
 	"github.com/useteploy/teploy/internal/ssh"
+	"golang.org/x/term"
 )
 
 func newSetupCmd(flags *Flags) *cobra.Command {
-	var name string
+	var (
+		name       string
+		noHarden   bool
+		networkPro string
+		authKey    string
+		password   bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "setup <host>",
 		Short: "Provision a server for teploy",
-		Long:  "Install Docker, configure firewall, start Caddy, and prepare a server for deployments.",
-		Args:  cobra.ExactArgs(1),
+		Long: `Install Docker, configure firewall, start Caddy, harden security, and prepare a server for deployments.
+
+Examples:
+  teploy setup 192.168.1.10 --name web1
+  teploy setup 192.168.1.10 --name web1 --user tyler --password
+  teploy setup 192.168.1.10 --name web1 --password --network tailscale --auth-key tskey-auth-...
+  teploy setup 192.168.1.10 --name web1 --no-harden`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSetup(flags, args[0], name)
+			return runSetup(flags, args[0], name, noHarden, networkPro, authKey, password)
 		},
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "server name for servers.yml (default: host address)")
+	cmd.Flags().BoolVar(&password, "password", false, "authenticate with password (prompts for input, installs SSH key)")
+	cmd.Flags().BoolVar(&noHarden, "no-harden", false, "skip security hardening")
+	cmd.Flags().StringVar(&networkPro, "network", "", "VPN provider (tailscale, headscale, netbird)")
+	cmd.Flags().StringVar(&authKey, "auth-key", "", "auth/setup key for VPN provider (falls back to env var)")
 
 	return cmd
 }
 
-func runSetup(flags *Flags, host string, name string) error {
+func runSetup(flags *Flags, host string, name string, noHarden bool, networkProvider string, authKey string, usePassword bool) error {
 	user := flags.User
 	if user == "" {
 		user = "root"
@@ -40,23 +61,144 @@ func runSetup(flags *Flags, host string, name string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
+	cfg := ssh.ConnectConfig{
+		Host:          host,
+		User:          user,
+		KeyPath:       flags.Key,
+		AcceptNewHost: true,
+	}
+
+	if usePassword {
+		fmt.Printf("Password for %s@%s: ", user, host)
+		passBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return fmt.Errorf("reading password: %w", err)
+		}
+		cfg.Password = string(passBytes)
+	}
+
 	fmt.Printf("Connecting to %s...\n", host)
 
-	executor, err := ssh.Connect(ctx, ssh.ConnectConfig{
-		Host:    host,
-		User:    user,
-		KeyPath: flags.Key,
-	})
+	executor, err := ssh.Connect(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer executor.Close()
 
+	// If password auth was used, inject the local SSH public key for future key-based auth.
+	if usePassword {
+		pubKeyPath, err := ssh.PublicKeyPath(flags.Key)
+		if err != nil {
+			return fmt.Errorf("finding SSH public key: %w", err)
+		}
+		pubKeyData, err := os.ReadFile(pubKeyPath)
+		if err != nil {
+			return fmt.Errorf("reading SSH public key: %w", err)
+		}
+		pubKey := strings.TrimSpace(string(pubKeyData))
+		installCmd := fmt.Sprintf(
+			"mkdir -p ~/.ssh && echo %s >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys",
+			shellQuote(pubKey),
+		)
+		if _, err := executor.Run(ctx, installCmd); err != nil {
+			return fmt.Errorf("installing SSH key: %w", err)
+		}
+		fmt.Println("SSH key installed")
+	}
+
+	// Check if we have root or passwordless sudo access — required for non-interactive setup.
+	whoami, _ := executor.Run(ctx, "whoami")
+	isRoot := strings.TrimSpace(whoami) == "root"
+	hasSudo := false
+	if !isRoot {
+		// Only count sudo as available if it works without a password prompt.
+		_, err := executor.Run(ctx, "sudo -n true 2>/dev/null")
+		hasSudo = err == nil
+	}
+
+	if !isRoot && !hasSudo {
+		fmt.Println("No sudo detected — root password needed to install it.")
+		fmt.Print("Root password: ")
+		rootPassBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return fmt.Errorf("reading root password: %w", err)
+		}
+		rootPass := string(rootPassBytes)
+
+		// Try connecting as root via SSH first (fastest path).
+		rootCfg := ssh.ConnectConfig{
+			Host:          host,
+			User:          "root",
+			KeyPath:       flags.Key,
+			Password:      rootPass,
+			AcceptNewHost: true,
+		}
+		fmt.Println("  Installing sudo...")
+		rootExec, rootErr := ssh.Connect(ctx, rootCfg)
+		if rootErr == nil {
+			// Root SSH works — install sudo directly.
+			if _, err := rootExec.Run(ctx, "apt-get update -qq && apt-get install -y -qq sudo && usermod -aG sudo "+user); err != nil {
+				rootExec.Close()
+				return fmt.Errorf("installing sudo: %w", err)
+			}
+			nopasswdCmd := fmt.Sprintf("echo '%s ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/%s && chmod 440 /etc/sudoers.d/%s", user, user, user)
+			if _, err := rootExec.Run(ctx, nopasswdCmd); err != nil {
+				rootExec.Close()
+				return fmt.Errorf("configuring sudoers: %w", err)
+			}
+			rootExec.Close()
+		} else {
+			// Root SSH denied — use expect-style su via the existing tyler connection.
+			// Write a helper script that uses su with the password from a file.
+			script := fmt.Sprintf(`#!/bin/bash
+exec 2>&1
+echo '%s' | su -c 'apt-get update -qq && apt-get install -y -qq sudo >/dev/null 2>&1 && usermod -aG sudo %s && echo "%s ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/%s && chmod 440 /etc/sudoers.d/%s && echo TEPLOY_SUDO_OK' - root 2>&1
+`, strings.ReplaceAll(rootPass, "'", "'\"'\"'"), user, user, user, user)
+			if err := executor.Upload(ctx, strings.NewReader(script), "/tmp/teploy_install_sudo.sh", "0700"); err != nil {
+				return fmt.Errorf("uploading sudo installer: %w", err)
+			}
+			out, err := executor.Run(ctx, "/tmp/teploy_install_sudo.sh")
+			executor.Run(ctx, "rm -f /tmp/teploy_install_sudo.sh")
+			if err != nil || !strings.Contains(out, "TEPLOY_SUDO_OK") {
+				if strings.Contains(out, "Authentication failure") {
+					return fmt.Errorf("wrong root password")
+				}
+				return fmt.Errorf("installing sudo via su failed: %s", out)
+			}
+		}
+		fmt.Printf("  sudo installed, %s added to sudo group\n", user)
+	}
+
 	if err := setupServer(ctx, executor, os.Stdout); err != nil {
 		return err
 	}
 
-	// Add to servers.yml
+	// Hardening (on by default, skip with --no-harden).
+	if !noHarden {
+		if err := harden.Harden(ctx, executor, os.Stdout); err != nil {
+			return err
+		}
+	}
+
+	// VPN network integration (opt-in via --network).
+	var vpnIP string
+	if networkProvider != "" {
+		vpnIP, err = setupNetwork(ctx, executor, os.Stdout, networkProvider, authKey)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Add to servers.yml — use VPN IP as host if available (LAN may become unreachable after VPN setup).
+	serverHost := host
+	if vpnIP != "" {
+		serverHost = vpnIP
+		fmt.Printf("\nVPN connected — server is now reachable at %s\n", vpnIP)
+		fmt.Printf("Note: the original address (%s) may no longer accept connections.\n", host)
+	}
+
 	if name == "" {
 		name = host
 	}
@@ -64,12 +206,167 @@ func runSetup(flags *Flags, host string, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := config.AddServer(serversPath, name, host, user, ""); err != nil {
+	if err := config.AddServer(serversPath, name, serverHost, user, "", vpnIP); err != nil {
 		return err
 	}
 
-	fmt.Printf("\nServer %q (%s) ready for deploys\n", name, host)
+	fmt.Printf("\nServer %q (%s) ready for deploys\n", name, serverHost)
 	return nil
+}
+
+// setupNetwork installs the VPN provider, joins the mesh, and returns the VPN IP.
+func setupNetwork(ctx context.Context, exec ssh.Executor, w io.Writer, providerName string, authKeyFlag string) (string, error) {
+	cfg, err := resolveNetworkConfig(providerName, authKeyFlag)
+	if err != nil {
+		return "", err
+	}
+
+	// Detect sudo for network commands.
+	sudo := ""
+	if whoami, _ := exec.Run(ctx, "whoami"); strings.TrimSpace(whoami) != "root" {
+		sudo = "sudo "
+		cfg.Sudo = sudo
+	}
+
+	provider, err := network.NewProvider(cfg)
+	if err != nil {
+		return "", err
+	}
+
+	fmt.Fprintf(w, "Installing %s...\n", providerName)
+	if err := provider.Install(ctx, exec, w); err != nil {
+		return "", fmt.Errorf("installing %s: %w", providerName, err)
+	}
+
+	// Get the server's hostname before joining — we'll use it to find the node locally.
+	hostname, _ := exec.Run(ctx, "hostname")
+	hostname = strings.TrimSpace(hostname)
+
+	// Preserve LAN access: detect the SSH connection's subnet and whitelist it
+	// in iptables before Tailscale modifies the firewall rules.
+	// Without this, tailscale up blocks all LAN traffic including our SSH session.
+	sshClientIP, _ := exec.Run(ctx, "echo $SSH_CLIENT | awk '{print $1}'")
+	sshClientIP = strings.TrimSpace(sshClientIP)
+	if sshClientIP != "" && !strings.Contains(sshClientIP, ":") { // IPv4 only
+		// Extract /24 subnet from the client IP
+		parts := strings.Split(sshClientIP, ".")
+		if len(parts) == 4 {
+			subnet := parts[0] + "." + parts[1] + "." + parts[2] + ".0/24"
+			exec.Run(ctx, sudo+"iptables -C ts-input -s "+subnet+" -j ACCEPT 2>/dev/null || "+sudo+"iptables -I ts-input 1 -s "+subnet+" -j ACCEPT 2>/dev/null; true")
+		}
+	}
+
+	// Fire VPN join in the background and don't wait for it.
+	// Tailscale/Headscale modifies iptables which can kill the SSH connection,
+	// so we detach the command and poll from the local machine instead.
+	fmt.Fprintf(w, "Joining %s mesh...\n", providerName)
+	var joinCmd string
+	switch providerName {
+	case "tailscale":
+		joinCmd = fmt.Sprintf(sudo+"nohup tailscale up --authkey=%q --accept-routes >/dev/null 2>&1 &", cfg.AuthKey)
+	case "headscale":
+		joinCmd = fmt.Sprintf(sudo+"nohup tailscale up --login-server=%q --authkey=%q --accept-routes >/dev/null 2>&1 &", cfg.Server, cfg.AuthKey)
+	case "netbird":
+		joinCmd = fmt.Sprintf(sudo+"nohup netbird up --setup-key %q >/dev/null 2>&1 &", cfg.SetupKey)
+	}
+	exec.Run(ctx, joinCmd) // ignore error — connection may die
+
+	// Poll locally for the node to appear on our tailnet.
+	fmt.Fprintf(w, "  Waiting for node to appear on tailnet...\n")
+	tsBinary := findTailscaleBinary()
+	var vpnIP string
+	for i := 0; i < 30; i++ { // 30 attempts, 2 seconds each = 60 second timeout
+		time.Sleep(2 * time.Second)
+		out, err := runLocal(tsBinary, "status")
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(out, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && strings.EqualFold(fields[1], hostname) {
+				vpnIP = fields[0]
+				break
+			}
+		}
+		if vpnIP != "" {
+			break
+		}
+	}
+
+	if vpnIP == "" {
+		return "", fmt.Errorf("timed out waiting for %s to join tailnet (expected hostname: %s)", providerName, hostname)
+	}
+
+	fmt.Fprintf(w, "  VPN IP: %s\n", vpnIP)
+	return vpnIP, nil
+}
+
+// runLocal executes a command on the local machine and returns its output.
+func runLocal(name string, args ...string) (string, error) {
+	cmd := osexec.Command(name, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// findTailscaleBinary returns the path to the tailscale CLI binary.
+// Checks PATH first, then common macOS/Linux locations.
+func findTailscaleBinary() string {
+	if path, err := osexec.LookPath("tailscale"); err == nil {
+		return path
+	}
+	// macOS app bundle
+	if _, err := os.Stat("/Applications/Tailscale.app/Contents/MacOS/Tailscale"); err == nil {
+		return "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+	}
+	// Linux common paths
+	for _, p := range []string{"/usr/bin/tailscale", "/usr/local/bin/tailscale"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "tailscale" // fallback, hope it's in PATH
+}
+
+// resolveNetworkConfig resolves auth keys from --auth-key flag, falling back to environment variables.
+func resolveNetworkConfig(providerName string, authKeyFlag string) (network.Config, error) {
+	switch providerName {
+	case "tailscale":
+		authKey := authKeyFlag
+		if authKey == "" {
+			authKey = os.Getenv("TEPLOY_TS_AUTHKEY")
+		}
+		if authKey == "" {
+			return network.Config{}, fmt.Errorf("auth key required — use --auth-key or set TEPLOY_TS_AUTHKEY")
+		}
+		return network.Config{Provider: "tailscale", AuthKey: authKey}, nil
+	case "headscale":
+		authKey := authKeyFlag
+		if authKey == "" {
+			authKey = os.Getenv("TEPLOY_HEADSCALE_AUTHKEY")
+		}
+		if authKey == "" {
+			return network.Config{}, fmt.Errorf("auth key required — use --auth-key or set TEPLOY_HEADSCALE_AUTHKEY")
+		}
+		server := os.Getenv("TEPLOY_HEADSCALE_SERVER")
+		if server == "" {
+			return network.Config{}, fmt.Errorf("TEPLOY_HEADSCALE_SERVER not set — set this env var with your Headscale server URL")
+		}
+		return network.Config{Provider: "headscale", AuthKey: authKey, Server: server}, nil
+	case "netbird":
+		setupKey := authKeyFlag
+		if setupKey == "" {
+			setupKey = os.Getenv("TEPLOY_NETBIRD_SETUP_KEY")
+		}
+		if setupKey == "" {
+			return network.Config{}, fmt.Errorf("setup key required — use --auth-key or set TEPLOY_NETBIRD_SETUP_KEY")
+		}
+		return network.Config{Provider: "netbird", SetupKey: setupKey}, nil
+	default:
+		return network.Config{}, fmt.Errorf("unknown network provider: %q (supported: tailscale, headscale, netbird)", providerName)
+	}
 }
 
 // setupServer runs the provisioning steps on a connected server.
@@ -92,15 +389,19 @@ func setupServer(ctx context.Context, exec ssh.Executor, w io.Writer) error {
 			installCmd = sudo + "sh -c 'wget -qO- https://get.docker.com | sh'"
 		}
 
-		if err := exec.RunStream(ctx, installCmd, w, w); err != nil {
+		out, err := exec.Run(ctx, installCmd)
+		if err != nil {
+			// Show output on failure for debugging.
+			fmt.Fprintln(w, out)
 			return fmt.Errorf("installing docker: %w", err)
 		}
 
-		// Verify Docker actually installed.
-		if _, err := exec.Run(ctx, "docker --version"); err != nil {
+		// Verify Docker actually installed and print version.
+		ver, err := exec.Run(ctx, "docker --version")
+		if err != nil {
 			return fmt.Errorf("docker install appeared to succeed but docker is not available")
 		}
-		fmt.Fprintln(w, "  Docker installed")
+		fmt.Fprintf(w, "  Docker installed (%s)\n", strings.TrimPrefix(strings.TrimSpace(ver), "Docker version "))
 
 		// Add current user to docker group so sudo isn't needed for docker commands.
 		exec.Run(ctx, sudo+"usermod -aG docker $(whoami)")
@@ -179,4 +480,8 @@ func setupServer(ctx context.Context, exec ssh.Executor, w io.Writer) error {
 
 	fmt.Fprintln(w, "Server provisioned successfully")
 	return nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }

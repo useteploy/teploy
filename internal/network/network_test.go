@@ -59,7 +59,7 @@ func TestTailscaleInstall_AlreadyInstalled(t *testing.T) {
 	)
 
 	p := &TailscaleProvider{AuthKey: "tskey-auth-xxx"}
-	if err := p.Install(context.Background(), mock); err != nil {
+	if err := p.Install(context.Background(), mock, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -72,11 +72,11 @@ func TestTailscaleInstall_AlreadyInstalled(t *testing.T) {
 func TestTailscaleInstall_Fresh(t *testing.T) {
 	mock := ssh.NewMockExecutor("server1",
 		ssh.MockCommand{Match: "which tailscale", Err: fmt.Errorf("not found")},
-		ssh.MockCommand{Match: "curl -fsSL https://tailscale.com/install.sh", Output: "installed"},
+		ssh.MockCommand{Match: "sh -c 'curl -fsSL https://tailscale.com/install.sh | sh'", Output: "installed"},
 	)
 
 	p := &TailscaleProvider{AuthKey: "tskey-auth-xxx"}
-	if err := p.Install(context.Background(), mock); err != nil {
+	if err := p.Install(context.Background(), mock, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -106,7 +106,7 @@ func TestTailscaleJoin_AlreadyConnected(t *testing.T) {
 func TestTailscaleJoin_Fresh(t *testing.T) {
 	mock := ssh.NewMockExecutor("server1",
 		ssh.MockCommand{Match: "tailscale status --json", Err: fmt.Errorf("not running")},
-		ssh.MockCommand{Match: "tailscale up", Output: ""},
+		ssh.MockCommand{Match: "nohup tailscale up", Output: ""},
 	)
 
 	p := &TailscaleProvider{AuthKey: "tskey-auth-xxx"}
@@ -116,7 +116,7 @@ func TestTailscaleJoin_Fresh(t *testing.T) {
 
 	var foundUp bool
 	for _, call := range mock.Calls {
-		if strings.HasPrefix(call, "tailscale up") {
+		if strings.Contains(call, "nohup tailscale up") {
 			foundUp = true
 			if !strings.Contains(call, "--authkey=") || !strings.Contains(call, "tskey-auth-xxx") {
 				t.Errorf("tailscale up should include authkey, got: %s", call)
@@ -127,7 +127,7 @@ func TestTailscaleJoin_Fresh(t *testing.T) {
 		}
 	}
 	if !foundUp {
-		t.Error("expected 'tailscale up' call")
+		t.Error("expected 'nohup tailscale up' call")
 	}
 }
 
@@ -152,7 +152,7 @@ func TestHeadscaleInstall_AlreadyInstalled(t *testing.T) {
 	)
 
 	p := &HeadscaleProvider{Server: "https://headscale.example.com", AuthKey: "key123"}
-	if err := p.Install(context.Background(), mock); err != nil {
+	if err := p.Install(context.Background(), mock, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -164,7 +164,7 @@ func TestHeadscaleInstall_AlreadyInstalled(t *testing.T) {
 func TestHeadscaleJoin_UsesLoginServer(t *testing.T) {
 	mock := ssh.NewMockExecutor("server1",
 		ssh.MockCommand{Match: "tailscale status --json", Err: fmt.Errorf("not running")},
-		ssh.MockCommand{Match: "tailscale up", Output: ""},
+		ssh.MockCommand{Match: "nohup tailscale up", Output: ""},
 	)
 
 	p := &HeadscaleProvider{Server: "https://headscale.example.com", AuthKey: "key123"}
@@ -174,7 +174,7 @@ func TestHeadscaleJoin_UsesLoginServer(t *testing.T) {
 
 	var foundUp bool
 	for _, call := range mock.Calls {
-		if strings.HasPrefix(call, "tailscale up") {
+		if strings.Contains(call, "nohup tailscale up") {
 			foundUp = true
 			if !strings.Contains(call, "--login-server=") || !strings.Contains(call, "headscale.example.com") {
 				t.Errorf("should use --login-server, got: %s", call)
@@ -185,7 +185,7 @@ func TestHeadscaleJoin_UsesLoginServer(t *testing.T) {
 		}
 	}
 	if !foundUp {
-		t.Error("expected 'tailscale up' call")
+		t.Error("expected 'nohup tailscale up' call")
 	}
 }
 
@@ -195,7 +195,7 @@ func TestNetbirdInstall_AlreadyInstalled(t *testing.T) {
 	)
 
 	p := &NetbirdProvider{SetupKey: "nb-setup-xxx"}
-	if err := p.Install(context.Background(), mock); err != nil {
+	if err := p.Install(context.Background(), mock, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 
@@ -207,11 +207,11 @@ func TestNetbirdInstall_AlreadyInstalled(t *testing.T) {
 func TestNetbirdInstall_Fresh(t *testing.T) {
 	mock := ssh.NewMockExecutor("server1",
 		ssh.MockCommand{Match: "which netbird", Err: fmt.Errorf("not found")},
-		ssh.MockCommand{Match: "curl -fsSL https://pkgs.netbird.io/install.sh", Output: "installed"},
+		ssh.MockCommand{Match: "sh -c 'curl -fsSL https://pkgs.netbird.io/install.sh | sh'", Output: "installed"},
 	)
 
 	p := &NetbirdProvider{SetupKey: "nb-setup-xxx"}
-	if err := p.Install(context.Background(), mock); err != nil {
+	if err := p.Install(context.Background(), mock, nil); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
 

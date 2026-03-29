@@ -59,6 +59,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.AddCommand(newScaleCmd(flags))
 	root.AddCommand(newAutoDeployCmd(flags))
 	root.AddCommand(newMaintenanceCmd(flags))
+	root.AddCommand(newUICmd())
 	root.AddCommand(newUpdateCmd(version))
 	root.AddCommand(newVersionCmd(version))
 

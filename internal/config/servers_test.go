@@ -180,7 +180,7 @@ func TestAddServer(t *testing.T) {
 	path := filepath.Join(dir, ".teploy", "servers.yml")
 
 	// Creates file and parent directory from scratch.
-	if err := AddServer(path, "prod", "1.2.3.4", "root", "app"); err != nil {
+	if err := AddServer(path, "prod", "1.2.3.4", "root", "app", ""); err != nil {
 		t.Fatalf("AddServer: %v", err)
 	}
 
@@ -206,10 +206,10 @@ func TestAddServer_Append(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.yml")
 
-	if err := AddServer(path, "prod", "1.2.3.4", "root", "app"); err != nil {
+	if err := AddServer(path, "prod", "1.2.3.4", "root", "app", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := AddServer(path, "staging", "5.6.7.8", "deploy", "app"); err != nil {
+	if err := AddServer(path, "staging", "5.6.7.8", "deploy", "app", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -229,8 +229,8 @@ func TestAddServer_Update(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.yml")
 
-	AddServer(path, "prod", "1.2.3.4", "root", "app")
-	AddServer(path, "prod", "10.0.0.1", "admin", "lb")
+	AddServer(path, "prod", "1.2.3.4", "root", "app", "")
+	AddServer(path, "prod", "10.0.0.1", "admin", "lb", "")
 
 	cfg, _ := LoadServers(path)
 	if cfg.Servers["prod"].Host != "10.0.0.1" {
@@ -248,7 +248,7 @@ func TestAddServer_WithRole(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.yml")
 
-	if err := AddServer(path, "lb1", "10.0.0.1", "root", "lb"); err != nil {
+	if err := AddServer(path, "lb1", "10.0.0.1", "root", "lb", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -265,8 +265,8 @@ func TestRemoveServer(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.yml")
 
-	AddServer(path, "prod", "1.2.3.4", "root", "app")
-	AddServer(path, "staging", "5.6.7.8", "deploy", "app")
+	AddServer(path, "prod", "1.2.3.4", "root", "app", "")
+	AddServer(path, "staging", "5.6.7.8", "deploy", "app", "")
 
 	if err := RemoveServer(path, "prod"); err != nil {
 		t.Fatalf("RemoveServer: %v", err)
@@ -291,7 +291,7 @@ func TestRemoveServer_NotFound(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.yml")
 
-	AddServer(path, "prod", "1.2.3.4", "root", "app")
+	AddServer(path, "prod", "1.2.3.4", "root", "app", "")
 
 	err := RemoveServer(path, "nonexistent")
 	if err == nil {
@@ -310,9 +310,9 @@ func TestListServers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.yml")
 
-	AddServer(path, "app1", "10.0.0.1", "root", "app")
-	AddServer(path, "app2", "10.0.0.2", "root", "app")
-	AddServer(path, "lb1", "10.0.0.3", "root", "lb")
+	AddServer(path, "app1", "10.0.0.1", "root", "app", "")
+	AddServer(path, "app2", "10.0.0.2", "root", "app", "")
+	AddServer(path, "lb1", "10.0.0.3", "root", "lb", "")
 
 	servers, err := ListServers(path)
 	if err != nil {
@@ -327,10 +327,10 @@ func TestGetServersByRole(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.yml")
 
-	AddServer(path, "app1", "10.0.0.1", "root", "app")
-	AddServer(path, "app2", "10.0.0.2", "root", "app")
-	AddServer(path, "lb1", "10.0.0.3", "root", "lb")
-	AddServer(path, "default1", "10.0.0.4", "root", "") // empty role defaults to app
+	AddServer(path, "app1", "10.0.0.1", "root", "app", "")
+	AddServer(path, "app2", "10.0.0.2", "root", "app", "")
+	AddServer(path, "lb1", "10.0.0.3", "root", "lb", "")
+	AddServer(path, "default1", "10.0.0.4", "root", "", "") // empty role defaults to app
 
 	appServers, err := GetServersByRole(path, "app")
 	if err != nil {
@@ -356,7 +356,7 @@ func TestGetServersByRole_NoMatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "servers.yml")
 
-	AddServer(path, "app1", "10.0.0.1", "root", "app")
+	AddServer(path, "app1", "10.0.0.1", "root", "app", "")
 
 	lbServers, err := GetServersByRole(path, "lb")
 	if err != nil {

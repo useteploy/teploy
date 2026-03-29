@@ -11,10 +11,11 @@ import (
 
 // Server represents a single server entry in servers.yml.
 type Server struct {
-	Host string            `yaml:"host"`
-	User string            `yaml:"user,omitempty"` // default: root
-	Role string            `yaml:"role,omitempty"` // app, lb, or empty (single-server)
-	Tags map[string]string `yaml:"tags,omitempty"` // per-host env vars injected during deploy
+	Host  string            `yaml:"host"`
+	User  string            `yaml:"user,omitempty"`   // default: root
+	Role  string            `yaml:"role,omitempty"`   // app, lb, or empty (single-server)
+	Tags  map[string]string `yaml:"tags,omitempty"`   // per-host env vars injected during deploy
+	VpnIP string            `yaml:"vpn_ip,omitempty"` // VPN mesh IP (tailscale, headscale, netbird)
 }
 
 // ServersConfig is the top-level structure of ~/.teploy/servers.yml.
@@ -106,7 +107,7 @@ func ResolveServer(name string, flagHost, flagUser, flagKey string) (host, user,
 
 // AddServer adds or updates a server entry in the given servers.yml file.
 // Creates the file and parent directory if they don't exist.
-func AddServer(path, name, host, user, role string) error {
+func AddServer(path, name, host, user, role, vpnIP string) error {
 	cfg := &ServersConfig{Servers: make(map[string]Server)}
 
 	data, err := os.ReadFile(path)
@@ -121,7 +122,7 @@ func AddServer(path, name, host, user, role string) error {
 		return fmt.Errorf("reading servers config: %w", err)
 	}
 
-	cfg.Servers[name] = Server{Host: host, User: user, Role: role}
+	cfg.Servers[name] = Server{Host: host, User: user, Role: role, VpnIP: vpnIP}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)

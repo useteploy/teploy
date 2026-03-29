@@ -29,9 +29,11 @@ type RemoteExecutor struct {
 
 // ConnectConfig holds the parameters for establishing an SSH connection.
 type ConnectConfig struct {
-	Host    string // IP or hostname (with optional :port)
-	User    string // SSH user (default: root)
-	KeyPath string // Path to SSH private key (optional, tries defaults)
+	Host           string // IP or hostname (with optional :port)
+	User           string // SSH user (default: root)
+	KeyPath        string // Path to SSH private key (optional, tries defaults)
+	Password       string // if set, use password auth instead of/in addition to key auth
+	AcceptNewHost  bool   // if true, auto-accept unknown host keys and save to known_hosts
 }
 
 // Connect establishes an SSH connection and returns a RemoteExecutor.
@@ -49,20 +51,33 @@ func Connect(ctx context.Context, cfg ConnectConfig) (*RemoteExecutor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolving SSH keys: %w", err)
 	}
-	if len(signers) == 0 {
+	if len(signers) == 0 && cfg.Password == "" {
 		return nil, fmt.Errorf("no SSH keys found; provide --key, set TEPLOY_SSH_KEY, or place a key at ~/.ssh/id_ed25519")
 	}
 
-	hostKeyCallback, err := defaultHostKeyCallback()
-	if err != nil {
-		return nil, fmt.Errorf("loading known hosts: %w", err)
+	authMethods := []ssh.AuthMethod{}
+	if len(signers) > 0 {
+		authMethods = append(authMethods, ssh.PublicKeys(signers...))
+	}
+	if cfg.Password != "" {
+		authMethods = append(authMethods, ssh.Password(cfg.Password))
+	}
+
+	var hostKeyCallback ssh.HostKeyCallback
+	if cfg.AcceptNewHost {
+		home, _ := os.UserHomeDir()
+		knownHostsPath := filepath.Join(home, ".ssh", "known_hosts")
+		hostKeyCallback = acceptNewHostKeyCallback(knownHostsPath)
+	} else {
+		hostKeyCallback, err = defaultHostKeyCallback()
+		if err != nil {
+			return nil, fmt.Errorf("loading known hosts: %w", err)
+		}
 	}
 
 	clientConfig := &ssh.ClientConfig{
-		User: cfg.User,
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signers...),
-		},
+		User:            cfg.User,
+		Auth:            authMethods,
 		HostKeyCallback: hostKeyCallback,
 	}
 
@@ -236,6 +251,67 @@ func dialWithContext(ctx context.Context, network, addr string, config *ssh.Clie
 		return nil, err
 	}
 	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// acceptNewHostKeyCallback returns a host key callback that accepts unknown
+// host keys (appending them to known_hosts) but rejects key mismatches.
+func acceptNewHostKeyCallback(knownHostsPath string) ssh.HostKeyCallback {
+	existing, existingErr := knownhosts.New(knownHostsPath)
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		if existingErr == nil {
+			err := existing(hostname, remote, key)
+			if err == nil {
+				return nil // known and matches
+			}
+			// Check if it's a genuine key mismatch vs unknown key type.
+			var keyErr *knownhosts.KeyError
+			if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
+				// The host exists in known_hosts. Check if any wanted key
+				// has the same key type — if so, it's a real mismatch (different
+				// key for the same type = MITM). If the key types differ,
+				// it's just a new key type we haven't seen — accept it.
+				presentedType := key.Type()
+				for _, want := range keyErr.Want {
+					if want.Key.Type() == presentedType {
+						return err // same type, different key = real mismatch
+					}
+				}
+				// Different key type — accept and save.
+			}
+			// Unknown key — fall through to accept and save.
+		}
+		// Append to known_hosts.
+		line := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
+		f, err := os.OpenFile(knownHostsPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+		if err != nil {
+			return nil // accept anyway, just can't save
+		}
+		defer f.Close()
+		fmt.Fprintln(f, line)
+		return nil
+	}
+}
+
+// PublicKeyPath returns the path to the SSH public key file.
+// Checks KeyPath+".pub" first, then default locations.
+func PublicKeyPath(keyPath string) (string, error) {
+	if keyPath != "" {
+		pub := keyPath + ".pub"
+		if _, err := os.Stat(pub); err == nil {
+			return pub, nil
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	for _, name := range []string{"id_ed25519.pub", "id_rsa.pub"} {
+		p := filepath.Join(home, ".ssh", name)
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("no SSH public key found")
 }
 
 func shellQuote(s string) string {
