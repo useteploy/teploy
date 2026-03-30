@@ -191,8 +191,26 @@ echo '%s' | su -c 'apt-get update -qq && apt-get install -y -qq sudo >/dev/null 
 		}
 	}
 
+	// If VPN was set up, reconnect via VPN IP — LAN may be blocked by Tailscale iptables.
+	serverHost := host
+	if vpnIP != "" {
+		serverHost = vpnIP
+		fmt.Printf("\nVPN connected — reconnecting via %s\n", vpnIP)
+		executor.Close()
+		reconnectCfg := ssh.ConnectConfig{
+			Host:          vpnIP,
+			User:          user,
+			KeyPath:       flags.Key,
+			AcceptNewHost: true,
+		}
+		executor, err = ssh.Connect(ctx, reconnectCfg)
+		if err != nil {
+			return fmt.Errorf("reconnecting via VPN IP %s: %w", vpnIP, err)
+		}
+		defer executor.Close()
+	}
+
 	// Enable auto security updates last — after all apt installs are done.
-	// This prevents unattended-upgrades from locking apt during setup.
 	if !noHarden {
 		sudo := ""
 		if w, _ := executor.Run(ctx, "whoami"); strings.TrimSpace(w) != "root" {
@@ -201,14 +219,6 @@ echo '%s' | su -c 'apt-get update -qq && apt-get install -y -qq sudo >/dev/null 
 		if err := harden.EnableAutoUpdates(ctx, executor, os.Stdout, sudo); err != nil {
 			return err
 		}
-	}
-
-	// Add to servers.yml — use VPN IP as host if available (LAN may become unreachable after VPN setup).
-	serverHost := host
-	if vpnIP != "" {
-		serverHost = vpnIP
-		fmt.Printf("\nVPN connected — server is now reachable at %s\n", vpnIP)
-		fmt.Printf("Note: the original address (%s) may no longer accept connections.\n", host)
 	}
 
 	if name == "" {
@@ -253,6 +263,12 @@ func setupNetwork(ctx context.Context, exec ssh.Executor, w io.Writer, providerN
 	// Get the server's hostname before joining — we'll use it to find the node locally.
 	hostname, _ := exec.Run(ctx, "hostname")
 	hostname = strings.TrimSpace(hostname)
+
+	// Reset Tailscale state if present — cloned VMs inherit the previous machine's identity
+	// which causes IP conflicts. Stop tailscaled, wipe state, restart.
+	if providerName == "tailscale" || providerName == "headscale" {
+		exec.Run(ctx, sudo+"systemctl stop tailscaled 2>/dev/null; "+sudo+"rm -rf /var/lib/tailscale; "+sudo+"systemctl start tailscaled 2>/dev/null; true")
+	}
 
 	// Preserve LAN access: detect the SSH connection's subnet and whitelist it
 	// in iptables before Tailscale modifies the firewall rules.
