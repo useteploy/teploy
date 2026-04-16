@@ -30,17 +30,27 @@ func newDeployCmd(flags *Flags) *cobra.Command {
 		skipDNSCheck bool
 		parallel     int
 		destination  string
+		appName      string
+		domain       string
+		port         int
 	)
 
 	cmd := &cobra.Command{
 		Use:   "deploy [server]",
 		Short: "Deploy the app to a server",
-		Long:  "Start a new container with health checking, route traffic via Caddy, and stop the old container — zero downtime.\nUse -d to deploy with a destination overlay (e.g. -d staging merges teploy.staging.yml).",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Start a new container with health checking, route traffic via Caddy, and stop the old container — zero downtime.
+Use -d to deploy with a destination overlay (e.g. -d staging merges teploy.staging.yml).
+
+For ad-hoc deploys without a teploy.yml (e.g. from teploy-ui), pass --app, --image, and --domain:
+  teploy deploy myserver --app myapp --image nginx:latest --domain app.example.com`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var serverName string
 			if len(args) > 0 {
 				serverName = args[0]
+			}
+			if appName != "" {
+				return runAdHocDeploy(flags, serverName, appName, image, domain, port, version, skipDNSCheck)
 			}
 			return runDeploy(flags, serverName, image, version, skipDNSCheck, parallel, destination)
 		},
@@ -51,8 +61,41 @@ func newDeployCmd(flags *Flags) *cobra.Command {
 	cmd.Flags().BoolVar(&skipDNSCheck, "skip-dns-check", false, "skip DNS validation (for proxied domains like Cloudflare)")
 	cmd.Flags().IntVar(&parallel, "parallel", 0, "max concurrent deploys for multi-server (default: from teploy.yml or 1)")
 	cmd.Flags().StringVarP(&destination, "destination", "d", "", "destination overlay (e.g. staging merges teploy.staging.yml)")
+	cmd.Flags().StringVar(&appName, "app", "", "app name for ad-hoc deploy (bypasses teploy.yml)")
+	cmd.Flags().StringVar(&domain, "domain", "", "domain for ad-hoc deploy")
+	cmd.Flags().IntVar(&port, "port", 80, "container port for ad-hoc deploy")
 
 	return cmd
+}
+
+// runAdHocDeploy handles deploys without a teploy.yml — used by teploy-ui
+// and scripting. Requires --app and --image at minimum.
+func runAdHocDeploy(flags *Flags, serverName, appName, image, domain string, port int, version string, skipDNSCheck bool) error {
+	if image == "" {
+		return fmt.Errorf("--image is required for ad-hoc deploy (no teploy.yml)")
+	}
+	if domain == "" {
+		return fmt.Errorf("--domain is required for ad-hoc deploy")
+	}
+	if serverName == "" {
+		serverName = flags.Host
+	}
+	if serverName == "" {
+		return fmt.Errorf("server is required — use 'teploy deploy <server> --app ...' or --host")
+	}
+	if port <= 0 {
+		port = 80
+	}
+
+	appCfg := &config.AppConfig{
+		App:    appName,
+		Image:  image,
+		Domain: domain,
+		Port:   port,
+		Server: serverName,
+	}
+
+	return deployAppConfig(flags, appCfg, serverName, image, version, skipDNSCheck)
 }
 
 func runDeploy(flags *Flags, serverName, image, version string, skipDNSCheck bool, parallel int, destination string) error {
