@@ -618,6 +618,7 @@ func (s *Server) handleAppRollback(w http.ResponseWriter, r *http.Request) {
 
 	cfg := deploy.RollbackConfig{
 		App:         appName,
+		Domain:      st.Domain,
 		StopTimeout: 10,
 	}
 
@@ -676,9 +677,14 @@ func (s *Server) handleAppMaintenance(w http.ResponseWriter, r *http.Request) {
 	cd := caddy.NewClient(exec)
 	ctx := r.Context()
 
+	// Read the actual domain from deploy state — Caddy routes match by domain.
+	domain := appName
+	if st, _ := state.Read(ctx, exec, appName); st != nil && st.Domain != "" {
+		domain = st.Domain
+	}
+
 	if action == "on" {
-		// We need the domain — try to read it from Caddy config or use app name
-		if err := cd.SetMaintenance(ctx, appName, appName); err != nil {
+		if err := cd.SetMaintenance(ctx, appName, domain); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
