@@ -291,62 +291,73 @@ func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 		Status  string `json:"status"` // running, stopped, unknown
 	}
 
-	apps := make([]appInfo, 0)
+	type serverResult struct {
+		apps []appInfo
+	}
 
+	ch := make(chan serverResult, len(servers))
 	for serverName := range servers {
-		// 5s timeout per server to avoid blocking on unreachable hosts.
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		exec, err := s.pool.Get(ctx, serverName)
-		if err != nil {
-			cancel()
-			continue
-		}
+		serverName := serverName
+		go func() {
+			var result serverResult
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
 
-		// List app directories under /deployments/
-		out, err := exec.Run(ctx, "ls -1 /deployments/ 2>/dev/null")
-		if err != nil {
-			cancel()
-			continue
-		}
-
-		for _, appName := range strings.Split(strings.TrimSpace(out), "\n") {
-			appName = strings.TrimSpace(appName)
-			if appName == "" || appName == "teploy.log" || appName == "caddy" || strings.HasPrefix(appName, ".") {
-				continue
+			exec, err := s.pool.Get(ctx, serverName)
+			if err != nil {
+				ch <- result
+				return
 			}
 
-			info := appInfo{
-				Name:   appName,
-				Server: serverName,
-				Status: "unknown",
+			out, err := exec.Run(ctx, "ls -1 /deployments/ 2>/dev/null")
+			if err != nil {
+				ch <- result
+				return
 			}
 
-			// Read state
-			if st, err := state.Read(ctx, exec, appName); err == nil && st != nil {
-				info.Version = st.CurrentHash
-				info.Port = st.CurrentPort
-			}
-
-			// Check if any containers are running
 			dk := docker.NewClient(exec)
-			if containers, err := dk.ListContainers(ctx, appName); err == nil {
-				hasRunning := false
-				for _, c := range containers {
-					if c.State == "running" {
-						hasRunning = true
-						break
+			for _, appName := range strings.Split(strings.TrimSpace(out), "\n") {
+				appName = strings.TrimSpace(appName)
+				if appName == "" || appName == "teploy.log" || appName == "caddy" || strings.HasPrefix(appName, ".") {
+					continue
+				}
+
+				info := appInfo{
+					Name:   appName,
+					Server: serverName,
+					Status: "unknown",
+				}
+
+				if st, err := state.Read(ctx, exec, appName); err == nil && st != nil {
+					info.Version = st.CurrentHash
+					info.Port = st.CurrentPort
+				}
+
+				if containers, err := dk.ListContainers(ctx, appName); err == nil {
+					hasRunning := false
+					for _, c := range containers {
+						if c.State == "running" {
+							hasRunning = true
+							break
+						}
+					}
+					if hasRunning {
+						info.Status = "running"
+					} else if len(containers) > 0 {
+						info.Status = "stopped"
 					}
 				}
-				if hasRunning {
-					info.Status = "running"
-				} else if len(containers) > 0 {
-					info.Status = "stopped"
-				}
-			}
 
-			apps = append(apps, info)
-		}
-		cancel()
+				result.apps = append(result.apps, info)
+			}
+			ch <- result
+		}()
+	}
+
+	apps := make([]appInfo, 0)
+	for range servers {
+		r := <-ch
+		apps = append(apps, r.apps...)
 	}
 
 	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
