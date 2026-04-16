@@ -155,7 +155,8 @@ func newAccessoryLogsCmd(flags *Flags) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().IntVar(&lines, "lines", 50, "number of log lines to show")
+	cmd.Flags().IntVar(&lines, "lines", 50, "number of log lines to show (--tail is an alias)")
+	cmd.Flags().SetNormalizeFunc(tailToLines)
 
 	return cmd
 }

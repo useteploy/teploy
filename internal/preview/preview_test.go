@@ -3,6 +3,7 @@ package preview
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/useteploy/teploy/internal/ssh"
@@ -36,9 +37,9 @@ func TestDeploy(t *testing.T) {
 		ssh.MockCommand{Match: "cat /deployments/myapp/previews/feature-login.json", Output: "", Err: nil},
 		ssh.MockCommand{Match: "ss -tln", Output: ""},
 		ssh.MockCommand{Match: "docker run", Output: "abc123"},
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Output: "", Err: nil},
-		ssh.MockCommand{Match: "curl -sf -X DELETE", Output: ""},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy_config.json", Output: ""},
 		ssh.MockCommand{Match: "UPLOAD:", Output: ""},
 	)

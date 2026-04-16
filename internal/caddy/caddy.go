@@ -88,67 +88,37 @@ func NewClient(exec ssh.Executor) *Client {
 }
 
 // SetRoute adds or updates a reverse proxy route for the given app.
-// Routes traffic for the domain to the app's Docker network alias at the
-// specified port. Caddy provisions HTTPS certificates automatically.
-func (c *Client) SetRoute(ctx context.Context, app, domain string, port int) error {
-	// Ignore errors from getHTTPApp — Caddy may not have HTTP config yet (first deploy).
-	httpApp, _ := c.getHTTPApp(ctx) //nolint:errcheck // expected to fail on first deploy
-	if httpApp == nil {
-		httpApp = &HTTPApp{}
-	}
-	if httpApp.Servers == nil {
-		httpApp.Servers = map[string]*HTTPServer{}
-	}
-
-	srv := httpApp.Servers["srv0"]
-	if srv == nil {
-		srv = &HTTPServer{Listen: []string{":80", ":443"}}
-		httpApp.Servers["srv0"] = srv
-	}
-
+// Routes traffic for the domain to the given upstream at the specified
+// container port. Caddy provisions HTTPS certificates automatically.
+//
+// Callers should pass a specific container name as the upstream rather
+// than a shared network alias: during deploys the alias can resolve to
+// both old and new containers and Docker DNS round-robins between them,
+// briefly routing traffic to a container that's about to be stopped.
+//
+// Uses Caddy's ID-based API to surgically upsert a single route without
+// touching any other routes (including those defined in the Caddyfile).
+func (c *Client) SetRoute(ctx context.Context, app, domain, upstream string, containerPort int) error {
 	routeID := "teploy-" + app
 	newRoute := Route{
 		ID:    routeID,
 		Match: []Match{{Host: []string{domain}}},
 		Handle: []Handler{{
 			Handler:   "reverse_proxy",
-			Upstreams: []Upstream{{Dial: fmt.Sprintf("%s:%d", app, port)}},
+			Upstreams: []Upstream{{Dial: fmt.Sprintf("%s:%d", upstream, containerPort)}},
 		}},
 	}
 
-	found := false
-	for i, r := range srv.Routes {
-		if r.ID == routeID {
-			srv.Routes[i] = newRoute
-			found = true
-			break
-		}
+	if err := c.ensureServer(ctx); err != nil {
+		return err
 	}
-	if !found {
-		srv.Routes = append(srv.Routes, newRoute)
-	}
-
-	return c.putHTTPApp(ctx, httpApp)
+	return c.putRouteByID(ctx, routeID, newRoute)
 }
 
 // SetLoadBalancer adds or updates a load-balanced reverse proxy route for the
 // given app. Traffic for the domain is distributed across multiple upstreams
 // using round-robin with active health checks.
 func (c *Client) SetLoadBalancer(ctx context.Context, app, domain string, upstreams []Upstream) error {
-	httpApp, _ := c.getHTTPApp(ctx) //nolint:errcheck // expected to fail on first deploy
-	if httpApp == nil {
-		httpApp = &HTTPApp{}
-	}
-	if httpApp.Servers == nil {
-		httpApp.Servers = map[string]*HTTPServer{}
-	}
-
-	srv := httpApp.Servers["srv0"]
-	if srv == nil {
-		srv = &HTTPServer{Listen: []string{":80", ":443"}}
-		httpApp.Servers["srv0"] = srv
-	}
-
 	routeID := "teploy-lb-" + app
 	newRoute := Route{
 		ID:    routeID,
@@ -171,19 +141,10 @@ func (c *Client) SetLoadBalancer(ctx context.Context, app, domain string, upstre
 		}},
 	}
 
-	found := false
-	for i, r := range srv.Routes {
-		if r.ID == routeID {
-			srv.Routes[i] = newRoute
-			found = true
-			break
-		}
+	if err := c.ensureServer(ctx); err != nil {
+		return err
 	}
-	if !found {
-		srv.Routes = append(srv.Routes, newRoute)
-	}
-
-	return c.putHTTPApp(ctx, httpApp)
+	return c.putRouteByID(ctx, routeID, newRoute)
 }
 
 // maintenancePage is the HTML returned during maintenance mode.
@@ -205,23 +166,9 @@ p{color:#666}
 </body></html>`
 
 // SetMaintenance enables maintenance mode for the given app.
-// Inserts a 503 static response route before all other routes so it intercepts
-// traffic for the domain. The existing reverse proxy route is left in place.
+// Inserts a 503 static response route that intercepts traffic for the domain.
+// The existing reverse proxy route is left in place.
 func (c *Client) SetMaintenance(ctx context.Context, app, domain string) error {
-	httpApp, _ := c.getHTTPApp(ctx)
-	if httpApp == nil {
-		httpApp = &HTTPApp{}
-	}
-	if httpApp.Servers == nil {
-		httpApp.Servers = map[string]*HTTPServer{}
-	}
-
-	srv := httpApp.Servers["srv0"]
-	if srv == nil {
-		srv = &HTTPServer{Listen: []string{":80", ":443"}}
-		httpApp.Servers["srv0"] = srv
-	}
-
 	routeID := "teploy-maint-" + app
 	maintRoute := Route{
 		ID:    routeID,
@@ -237,64 +184,156 @@ func (c *Client) SetMaintenance(ctx context.Context, app, domain string) error {
 		}},
 	}
 
-	// Remove existing maintenance route if present, then prepend.
-	filtered := []Route{maintRoute}
-	for _, r := range srv.Routes {
-		if r.ID != routeID {
-			filtered = append(filtered, r)
-		}
+	if err := c.ensureServer(ctx); err != nil {
+		return err
 	}
-	srv.Routes = filtered
 
-	return c.putHTTPApp(ctx, httpApp)
+	// Maintenance routes must appear before regular routes to intercept traffic.
+	// Prepend by inserting at index 0 of the routes array.
+	return c.prependRouteByID(ctx, routeID, maintRoute)
 }
 
 // RemoveMaintenance disables maintenance mode for the given app.
 func (c *Client) RemoveMaintenance(ctx context.Context, app string) error {
-	httpApp, err := c.getHTTPApp(ctx)
-	if err != nil || httpApp == nil {
-		return nil
-	}
-
-	srv := httpApp.Servers["srv0"]
-	if srv == nil {
-		return nil
-	}
-
-	routeID := "teploy-maint-" + app
-	filtered := make([]Route, 0, len(srv.Routes))
-	for _, r := range srv.Routes {
-		if r.ID != routeID {
-			filtered = append(filtered, r)
-		}
-	}
-	srv.Routes = filtered
-
-	return c.putHTTPApp(ctx, httpApp)
+	return c.deleteRouteByID(ctx, "teploy-maint-"+app)
 }
 
 // RemoveRoute removes the route for the given app. No-op if no route exists.
 func (c *Client) RemoveRoute(ctx context.Context, app string) error {
-	httpApp, err := c.getHTTPApp(ctx)
-	if err != nil || httpApp == nil {
-		return nil
+	return c.deleteRouteByID(ctx, "teploy-"+app)
+}
+
+// ensureServer makes sure Caddy has an HTTP server (srv0) configured with
+// listen addresses. On a fresh Caddy instance with only a minimal Caddyfile,
+// the HTTP app may not exist yet. This creates the skeleton without touching
+// any existing routes.
+func (c *Client) ensureServer(ctx context.Context) error {
+	// Check if srv0 already exists.
+	_, err := c.exec.Run(ctx, "curl -sf "+adminAPI+"/config/apps/http/servers/srv0")
+	if err == nil {
+		return nil // server already exists
 	}
 
-	srv := httpApp.Servers["srv0"]
-	if srv == nil {
-		return nil
+	// Create the server skeleton. PUT to the specific path so we don't
+	// overwrite any existing config at other paths.
+	srv := HTTPServer{Listen: []string{":80", ":443"}, Routes: []Route{}}
+	body, err := json.Marshal(srv)
+	if err != nil {
+		return fmt.Errorf("marshaling server config: %w", err)
 	}
 
-	routeID := "teploy-" + app
-	filtered := make([]Route, 0, len(srv.Routes))
-	for _, r := range srv.Routes {
-		if r.ID != routeID {
-			filtered = append(filtered, r)
+	if err := c.exec.Upload(ctx, bytes.NewReader(body), tmpConfig, "0644"); err != nil {
+		return fmt.Errorf("uploading server config: %w", err)
+	}
+
+	cmd := fmt.Sprintf(
+		"curl -sf -X PUT %s/config/apps/http/servers/srv0 -H 'Content-Type: application/json' -d @%s",
+		adminAPI, tmpConfig,
+	)
+	_, err = c.exec.Run(ctx, cmd)
+	c.exec.Run(ctx, "rm -f "+tmpConfig)
+	if err != nil {
+		return fmt.Errorf("creating caddy server: %w", err)
+	}
+	return nil
+}
+
+// putRouteByID upserts a route using Caddy's /id/ API endpoint.
+// This only touches the targeted route — all other routes (including
+// Caddyfile-defined routes) are left untouched.
+func (c *Client) putRouteByID(ctx context.Context, routeID string, route Route) error {
+	body, err := json.Marshal(route)
+	if err != nil {
+		return fmt.Errorf("marshaling route: %w", err)
+	}
+
+	if err := c.exec.Upload(ctx, bytes.NewReader(body), tmpConfig, "0644"); err != nil {
+		return fmt.Errorf("uploading route config: %w", err)
+	}
+
+	// Try PATCH on existing route first (update in place).
+	cmd := fmt.Sprintf(
+		"curl -sf -X PATCH %s/id/%s -H 'Content-Type: application/json' -d @%s",
+		adminAPI, routeID, tmpConfig,
+	)
+	_, err = c.exec.Run(ctx, cmd)
+
+	if err != nil {
+		// Route doesn't exist yet — append it to the routes array.
+		cmd = fmt.Sprintf(
+			"curl -sf -X POST %s/config/apps/http/servers/srv0/routes -H 'Content-Type: application/json' -d @%s",
+			adminAPI, tmpConfig,
+		)
+		_, err = c.exec.Run(ctx, cmd)
+	}
+
+	c.exec.Run(ctx, "rm -f "+tmpConfig)
+	if err != nil {
+		return fmt.Errorf("setting route %s: %w", routeID, err)
+	}
+	return nil
+}
+
+// prependRouteByID inserts a route at the beginning of the routes array.
+// Used for maintenance routes that must intercept before reverse proxy routes.
+// If a route with the same ID already exists, it is removed first.
+func (c *Client) prependRouteByID(ctx context.Context, routeID string, route Route) error {
+	// Remove existing route with this ID if present.
+	c.deleteRouteByID(ctx, routeID)
+
+	body, err := json.Marshal(route)
+	if err != nil {
+		return fmt.Errorf("marshaling route: %w", err)
+	}
+
+	if err := c.exec.Upload(ctx, bytes.NewReader(body), tmpConfig, "0644"); err != nil {
+		return fmt.Errorf("uploading route config: %w", err)
+	}
+
+	// Prepend: POST to routes array at index 0 isn't directly supported,
+	// so we read current routes, prepend, and write the full routes array.
+	httpApp, _ := c.getHTTPApp(ctx)
+	if httpApp == nil || httpApp.Servers == nil || httpApp.Servers["srv0"] == nil {
+		// No existing routes — just append.
+		cmd := fmt.Sprintf(
+			"curl -sf -X POST %s/config/apps/http/servers/srv0/routes -H 'Content-Type: application/json' -d @%s",
+			adminAPI, tmpConfig,
+		)
+		_, err = c.exec.Run(ctx, cmd)
+		c.exec.Run(ctx, "rm -f "+tmpConfig)
+		if err != nil {
+			return fmt.Errorf("prepending route %s: %w", routeID, err)
 		}
+		return nil
 	}
-	srv.Routes = filtered
 
-	return c.putHTTPApp(ctx, httpApp)
+	routes := append([]Route{route}, httpApp.Servers["srv0"].Routes...)
+	routesBody, err := json.Marshal(routes)
+	if err != nil {
+		return fmt.Errorf("marshaling routes: %w", err)
+	}
+
+	if err := c.exec.Upload(ctx, bytes.NewReader(routesBody), tmpConfig, "0644"); err != nil {
+		return fmt.Errorf("uploading routes: %w", err)
+	}
+
+	cmd := fmt.Sprintf(
+		"curl -sf -X PUT %s/config/apps/http/servers/srv0/routes -H 'Content-Type: application/json' -d @%s",
+		adminAPI, tmpConfig,
+	)
+	_, err = c.exec.Run(ctx, cmd)
+	c.exec.Run(ctx, "rm -f "+tmpConfig)
+	if err != nil {
+		return fmt.Errorf("prepending route %s: %w", routeID, err)
+	}
+	return nil
+}
+
+// deleteRouteByID removes a route by its @id. No-op if the route doesn't exist.
+func (c *Client) deleteRouteByID(ctx context.Context, routeID string) error {
+	cmd := fmt.Sprintf("curl -sf -X DELETE %s/id/%s", adminAPI, routeID)
+	c.exec.Run(ctx, cmd) // ignore error — route may not exist
+	return nil
 }
 
 func (c *Client) getHTTPApp(ctx context.Context) (*HTTPApp, error) {
@@ -308,36 +347,4 @@ func (c *Client) getHTTPApp(ctx context.Context) (*HTTPApp, error) {
 		return nil, fmt.Errorf("parsing caddy HTTP config: %w", err)
 	}
 	return &app, nil
-}
-
-func (c *Client) putHTTPApp(ctx context.Context, app *HTTPApp) error {
-	body, err := json.Marshal(app)
-	if err != nil {
-		return fmt.Errorf("marshaling caddy config: %w", err)
-	}
-
-	if err := c.exec.Upload(ctx, bytes.NewReader(body), tmpConfig, "0644"); err != nil {
-		return fmt.Errorf("uploading caddy config: %w", err)
-	}
-
-	cmd := fmt.Sprintf(
-		"curl -sf -X PUT %s/config/apps/http -H 'Content-Type: application/json' -d @%s",
-		adminAPI, tmpConfig,
-	)
-	_, err = c.exec.Run(ctx, cmd)
-
-	if err != nil {
-		// PUT may fail if path doesn't exist yet — try DELETE + PUT as fallback.
-		c.exec.Run(ctx, fmt.Sprintf("curl -sf -X DELETE %s/config/apps/http", adminAPI))
-		_, err = c.exec.Run(ctx, cmd)
-	}
-
-	// Clean up temp file regardless.
-	c.exec.Run(ctx, "rm -f "+tmpConfig)
-
-	if err != nil {
-		return fmt.Errorf("applying caddy config: %w", err)
-	}
-
-	return nil
 }

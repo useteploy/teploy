@@ -25,6 +25,7 @@ func newSetupCmd(flags *Flags) *cobra.Command {
 		networkPro string
 		authKey    string
 		password   bool
+		yes        bool
 	)
 
 	cmd := &cobra.Command{
@@ -39,7 +40,7 @@ Examples:
   teploy setup 192.168.1.10 --name web1 --no-harden`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSetup(flags, args[0], name, noHarden, networkPro, authKey, password)
+			return runSetup(flags, args[0], name, noHarden, networkPro, authKey, password, yes)
 		},
 	}
 
@@ -48,11 +49,12 @@ Examples:
 	cmd.Flags().BoolVar(&noHarden, "no-harden", false, "skip security hardening")
 	cmd.Flags().StringVar(&networkPro, "network", "", "VPN provider (tailscale, headscale, netbird)")
 	cmd.Flags().StringVar(&authKey, "auth-key", "", "auth/setup key for VPN provider (falls back to env var)")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompts (required for non-interactive upgrades that recreate Caddy)")
 
 	return cmd
 }
 
-func runSetup(flags *Flags, host string, name string, noHarden bool, networkProvider string, authKey string, usePassword bool) error {
+func runSetup(flags *Flags, host string, name string, noHarden bool, networkProvider string, authKey string, usePassword bool, yes bool) error {
 	user := flags.User
 	if user == "" {
 		user = "root"
@@ -171,7 +173,7 @@ echo '%s' | su -c 'apt-get update -qq && apt-get install -y -qq sudo >/dev/null 
 		fmt.Printf("  sudo installed, %s added to sudo group\n", user)
 	}
 
-	if err := setupServer(ctx, executor, os.Stdout); err != nil {
+	if err := setupServer(ctx, executor, os.Stdout, yes); err != nil {
 		return err
 	}
 
@@ -399,7 +401,8 @@ func resolveNetworkConfig(providerName string, authKeyFlag string) (network.Conf
 
 // setupServer runs the provisioning steps on a connected server.
 // Separated from runSetup for testability with MockExecutor.
-func setupServer(ctx context.Context, exec ssh.Executor, w io.Writer) error {
+// yes skips interactive confirmation for destructive upgrade steps (Caddy recreate).
+func setupServer(ctx context.Context, exec ssh.Executor, w io.Writer, yes bool) error {
 	// Detect whether we need sudo (non-root users).
 	sudo := ""
 	if whoami, _ := exec.Run(ctx, "whoami"); strings.TrimSpace(whoami) != "root" {
@@ -477,14 +480,59 @@ func setupServer(ctx context.Context, exec ssh.Executor, w io.Writer) error {
 	// Caddy admin API listens on 0.0.0.0 inside container so Docker port
 	// forwarding can reach it. Port 2019 is only published to 127.0.0.1
 	// on the host — never publicly accessible.
-	caddyfile := "{\n    admin 0.0.0.0:2019\n}\n"
-	if err := exec.Upload(ctx, strings.NewReader(caddyfile), "/deployments/caddy/Caddyfile", "0644"); err != nil {
-		return fmt.Errorf("uploading Caddyfile: %w", err)
+	// Tab-indented to match `caddy fmt` output so Caddy doesn't warn.
+	// Only write the stub Caddyfile when none exists — on servers that
+	// were provisioned by other tooling (e.g., Dokploy) or hand-edited,
+	// the existing Caddyfile holds live production routes and must be
+	// preserved.
+	const stubCaddyfile = "{\n\tadmin 0.0.0.0:2019\n}\n"
+	if _, err := exec.Run(ctx, "test -s /deployments/caddy/Caddyfile"); err != nil {
+		if err := exec.Upload(ctx, strings.NewReader(stubCaddyfile), "/deployments/caddy/Caddyfile", "0644"); err != nil {
+			return fmt.Errorf("uploading Caddyfile: %w", err)
+		}
+	} else {
+		fmt.Fprintln(w, "  Existing Caddyfile preserved")
 	}
 
-	// 5. Start Caddy (idempotent — skip if container already exists)
+	// 5. Start Caddy (idempotent — skip if container already exists).
+	// `--resume` makes Caddy boot from /config/caddy/autosave.json (which it
+	// auto-writes on every admin API change) instead of the Caddyfile, so
+	// admin-API-managed routes survive reloads and container restarts.
 	fmt.Fprintln(w, "Starting Caddy...")
 	caddyCheck, _ := exec.Run(ctx, dockerCmd+" ps -a --filter name=^caddy$ --format '{{.Names}}'")
+	extraNetworks := []string{}
+	if strings.TrimSpace(caddyCheck) != "" {
+		// Detect old Caddy containers missing --resume. Recreation is
+		// destructive (brief outage + requires re-attaching any non-teploy
+		// networks), so we require explicit confirmation.
+		cmdOut, _ := exec.Run(ctx, dockerCmd+" inspect -f '{{join .Config.Cmd \" \"}}' caddy")
+		if !strings.Contains(cmdOut, "--resume") {
+			// Capture every network the existing Caddy is attached to so
+			// we can reattach them after recreating. Previously these were
+			// silently dropped, leaving apps on other networks (e.g.
+			// dokploy-network) unreachable.
+			netOut, _ := exec.Run(ctx, dockerCmd+" inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' caddy")
+			for _, n := range strings.Fields(netOut) {
+				if n != "" && n != "teploy" {
+					extraNetworks = append(extraNetworks, n)
+				}
+			}
+
+			fmt.Fprintln(w, "  Caddy is running without --resume — admin API routes won't survive reloads.")
+			fmt.Fprintln(w, "  Upgrading requires recreating the container (brief outage).")
+			if len(extraNetworks) > 0 {
+				fmt.Fprintf(w, "  Additional networks to reattach: %s\n", strings.Join(extraNetworks, ", "))
+			}
+			if !yes && !confirm(w, "  Recreate Caddy container now?") {
+				fmt.Fprintln(w, "  Skipping Caddy upgrade — re-run with --yes to apply.")
+				return nil
+			}
+			if _, err := exec.Run(ctx, dockerCmd+" rm -f caddy"); err != nil {
+				return fmt.Errorf("removing old caddy: %w", err)
+			}
+			caddyCheck = ""
+		}
+	}
 	if strings.TrimSpace(caddyCheck) == "" {
 		caddyRun := strings.Join([]string{
 			dockerCmd, "run", "-d",
@@ -495,11 +543,20 @@ func setupServer(ctx context.Context, exec ssh.Executor, w io.Writer) error {
 			"-p", "443:443",
 			"-p", "127.0.0.1:2019:2019",
 			"-v", "caddy_data:/data",
+			"-v", "caddy_config:/config",
 			"-v", "/deployments/caddy/Caddyfile:/etc/caddy/Caddyfile",
 			"caddy",
+			"caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile", "--resume",
 		}, " ")
 		if _, err := exec.Run(ctx, caddyRun); err != nil {
 			return fmt.Errorf("starting caddy: %w", err)
+		}
+		for _, n := range extraNetworks {
+			if _, err := exec.Run(ctx, fmt.Sprintf("%s network connect %s caddy", dockerCmd, n)); err != nil {
+				fmt.Fprintf(w, "  Warning: failed to reattach %s: %v\n", n, err)
+			} else {
+				fmt.Fprintf(w, "  Reattached network %s\n", n)
+			}
 		}
 		fmt.Fprintln(w, "  Caddy started")
 	} else {
@@ -512,4 +569,21 @@ func setupServer(ctx context.Context, exec ssh.Executor, w io.Writer) error {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+// confirm prompts the user for a yes/no answer on stdin. Returns false
+// when stdin isn't a TTY so non-interactive runs fail safe (callers
+// should require --yes to proceed without interactive confirmation).
+func confirm(w io.Writer, prompt string) bool {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintln(w, "  (non-interactive — pass --yes to confirm)")
+		return false
+	}
+	fmt.Fprintf(w, "%s [y/N]: ", prompt)
+	var answer string
+	if _, err := fmt.Fscanln(os.Stdin, &answer); err != nil {
+		return false
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes"
 }

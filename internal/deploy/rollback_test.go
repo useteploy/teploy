@@ -29,6 +29,8 @@ func TestRollback(t *testing.T) {
 		},
 		ssh.MockCommand{Match: "docker start", Output: ""},
 		ssh.MockCommand{Match: "curl", Output: "200"},
+		// Previous container's internal port resolved via docker inspect.
+		ssh.MockCommand{Match: "docker inspect -f '{{range $p, $_ := .NetworkSettings.Ports}}", Output: "3000/tcp"},
 		ssh.MockCommand{Match: "caddy", Output: ""},
 		ssh.MockCommand{Match: "docker stop", Output: ""},
 		ssh.MockCommand{Match: "mkdir -p", Output: ""},
@@ -62,6 +64,24 @@ func TestRollback(t *testing.T) {
 	}
 	if startCalls != 1 {
 		t.Errorf("expected 1 start call, got %d", startCalls)
+	}
+
+	// Verify Caddy was pointed at the container's *internal* port, not
+	// the host-mapped PreviousPort (49152). The container exposes 3000.
+	var routeUpload []byte
+	for path, data := range mock.Files {
+		if strings.Contains(path, "teploy_caddy_config") {
+			routeUpload = data
+		}
+	}
+	if routeUpload == nil {
+		t.Fatal("expected caddy route upload")
+	}
+	if !strings.Contains(string(routeUpload), "myapp-web-v1:3000") {
+		t.Errorf("rollback route should dial container's internal port (3000), got: %s", string(routeUpload))
+	}
+	if strings.Contains(string(routeUpload), ":49152") {
+		t.Errorf("rollback route should not use host port 49152, got: %s", string(routeUpload))
 	}
 
 	// Verify current container was stopped.

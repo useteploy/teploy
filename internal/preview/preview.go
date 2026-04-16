@@ -135,9 +135,11 @@ func (m *Manager) Deploy(ctx context.Context, cfg DeployConfig) error {
 		return fmt.Errorf("starting preview container: %w", err)
 	}
 
-	// Set Caddy route for preview domain.
+	// Set Caddy route for preview domain. The preview container gets a
+	// dedicated network alias (cfg.App + "-preview-" + sanitized) via
+	// docker.RunConfig.Process, which is what we dial here.
 	routeApp := cfg.App + "-preview-" + sanitized
-	if err := m.caddy.SetRoute(ctx, routeApp, domain, port); err != nil {
+	if err := m.caddy.SetRoute(ctx, routeApp, domain, routeApp, port); err != nil {
 		// Clean up container on route failure.
 		m.docker.Stop(ctx, containerName, 5)
 		m.docker.Remove(ctx, containerName)

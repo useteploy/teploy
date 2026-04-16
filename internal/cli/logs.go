@@ -7,6 +7,7 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/useteploy/teploy/internal/config"
 	"github.com/useteploy/teploy/internal/docker"
 	"github.com/useteploy/teploy/internal/state"
@@ -29,9 +30,19 @@ func newLogsCmd(flags *Flags) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&process, "process", "web", "process type to view logs for")
-	cmd.Flags().IntVar(&lines, "lines", 50, "number of historical log lines")
+	cmd.Flags().IntVar(&lines, "lines", 50, "number of historical log lines (--tail is an alias)")
+	cmd.Flags().SetNormalizeFunc(tailToLines)
 
 	return cmd
+}
+
+// tailToLines lets `--tail N` be used as a shorthand for `--lines N`,
+// matching the muscle memory of `docker logs --tail`.
+func tailToLines(_ *pflag.FlagSet, name string) pflag.NormalizedName {
+	if name == "tail" {
+		return "lines"
+	}
+	return pflag.NormalizedName(name)
 }
 
 func runLogs(flags *Flags, process string, lines int) error {

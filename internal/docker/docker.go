@@ -195,6 +195,33 @@ func (c *Client) Remove(ctx context.Context, name string) error {
 	return nil
 }
 
+// InternalPort returns the container's internal listening port — the port
+// the app speaks HTTP on inside the Docker network, not the host-mapped
+// port. Caddy dials this port when reverse-proxying over the teploy
+// network. Returns an error if the container exposes zero or multiple
+// ports (teploy containers always expose exactly one).
+func (c *Client) InternalPort(ctx context.Context, name string) (int, error) {
+	// `docker inspect` emits each exposed port once, e.g. "3000/tcp".
+	out, err := c.exec.Run(ctx, fmt.Sprintf(
+		"docker inspect -f '{{range $p, $_ := .NetworkSettings.Ports}}{{$p}} {{end}}' %s",
+		name,
+	))
+	if err != nil {
+		return 0, fmt.Errorf("inspecting container %s: %w", name, err)
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("container %s has no exposed ports", name)
+	}
+	// Take the first port — teploy only publishes one per container.
+	portStr, _, _ := strings.Cut(fields[0], "/")
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("parsing port %q from container %s: %w", fields[0], name, err)
+	}
+	return port, nil
+}
+
 // ListContainers returns all containers for the given app, including stopped ones.
 func (c *Client) ListContainers(ctx context.Context, app string) ([]Container, error) {
 	cmd := "docker ps --all --filter label=teploy.app=" + app + " --format '{{json .}}'"

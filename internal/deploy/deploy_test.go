@@ -35,10 +35,11 @@ func TestDeploy_FirstDeploy(t *testing.T) {
 		ssh.MockCommand{Match: "docker inspect", Output: "running"},
 		// 7. Health check.
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
-		// 8. Caddy GET (no existing config).
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		// 9. Caddy PUT.
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		// 8. Caddy ensureServer (srv0 exists).
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		// 9. Caddy putRouteByID: PATCH to update route (fails, then POST to append).
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		// 10. Caddy temp cleanup.
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// 11. Log append.
@@ -131,8 +132,9 @@ func TestDeploy_UpdateExisting(t *testing.T) {
 		ssh.MockCommand{Match: "docker run", Output: "newcontainer123"},
 		ssh.MockCommand{Match: "docker inspect", Output: "running"},
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// Stop and remove old container.
 		ssh.MockCommand{Match: "docker stop", Output: ""},
@@ -388,8 +390,9 @@ func TestDeploy_SameVersion(t *testing.T) {
 		ssh.MockCommand{Match: "docker run", Output: "newcontainer"},
 		ssh.MockCommand{Match: "docker inspect -f", Output: "running"},
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// Stop renamed container.
 		ssh.MockCommand{Match: "docker stop", Output: ""},
@@ -443,8 +446,9 @@ func TestDeploy_WithHooks(t *testing.T) {
 		// Health check.
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
 		// Caddy.
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// Log and lock.
 		ssh.MockCommand{Match: "cat /tmp/teploy_log_entry", Output: ""},
@@ -556,8 +560,9 @@ func TestDeploy_PostDeployHookFailure(t *testing.T) {
 		// Health check.
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
 		// Caddy.
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// Post-deploy hook fails.
 		ssh.MockCommand{Match: "docker exec", Output: "cache clear failed", Err: fmt.Errorf("exit status 1")},
@@ -614,8 +619,9 @@ func TestDeploy_WithWorkers(t *testing.T) {
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
 		// Worker container (also matches "docker run" — both succeed).
 		// Caddy.
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// Log and lock.
 		ssh.MockCommand{Match: "cat /tmp/teploy_log_entry", Output: ""},
@@ -703,8 +709,9 @@ func TestDeploy_WorkerStartFailure(t *testing.T) {
 		// Health check.
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
 		// Caddy.
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// Stop old containers.
 		ssh.MockCommand{Match: "docker stop", Output: ""},
@@ -762,8 +769,9 @@ func TestDeploy_AssetBridging(t *testing.T) {
 		// 8. Health check.
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
 		// 9. Caddy.
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// 10. Asset cleanup.
 		ssh.MockCommand{Match: "find /deployments/myapp/assets", Output: ""},
@@ -839,8 +847,9 @@ func TestDeploy_AssetBridgingCustomKeepDays(t *testing.T) {
 		ssh.MockCommand{Match: "docker run --detach", Output: "abc123"},
 		ssh.MockCommand{Match: "docker inspect", Output: "running"},
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		ssh.MockCommand{Match: "find /deployments/myapp/assets", Output: ""},
 		ssh.MockCommand{Match: "cat /tmp/teploy_log_entry", Output: ""},
@@ -886,8 +895,9 @@ func TestDeploy_SameVersionWithWorkers(t *testing.T) {
 		ssh.MockCommand{Match: "docker run", Output: "redeploycontainer"},
 		ssh.MockCommand{Match: "docker inspect -f", Output: "running"},
 		ssh.MockCommand{Match: "curl -s -o /dev/null", Output: "200"},
-		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http", Err: fmt.Errorf("404")},
-		ssh.MockCommand{Match: "curl -sf -X PUT", Output: ""},
+		ssh.MockCommand{Match: "curl -sf http://localhost:2019/config/apps/http/servers/srv0", Output: `{"listen":[":80",":443"]}`},
+		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
 		// Stop renamed containers.
 		ssh.MockCommand{Match: "docker stop", Output: ""},

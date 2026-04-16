@@ -24,7 +24,7 @@ func TestSetupServer(t *testing.T) {
 	)
 
 	var buf bytes.Buffer
-	if err := setupServer(context.Background(), mock, &buf); err != nil {
+	if err := setupServer(context.Background(), mock, &buf, true); err != nil {
 		t.Fatalf("setupServer: %v", err)
 	}
 
@@ -91,12 +91,14 @@ func TestSetupServer_InstallDocker(t *testing.T) {
 		ssh.MockCommand{Match: "docker info", Output: ""},
 		ssh.MockCommand{Match: "docker network", Output: "teploy"},
 		ssh.MockCommand{Match: "mkdir", Output: ""},
+		ssh.MockCommand{Match: "chown", Output: ""},
+		ssh.MockCommand{Match: "test -s /deployments/caddy/Caddyfile", Err: fmt.Errorf("no such file")},
 		ssh.MockCommand{Match: "docker ps -a --filter name=", Output: ""},
 		ssh.MockCommand{Match: "docker run", Output: "caddy_id"},
 	)
 
 	var buf bytes.Buffer
-	if err := setupServer(context.Background(), mock, &buf); err != nil {
+	if err := setupServer(context.Background(), mock, &buf, true); err != nil {
 		t.Fatalf("setupServer: %v", err)
 	}
 
@@ -117,11 +119,15 @@ func TestSetupServer_CaddyAlreadyRunning(t *testing.T) {
 		ssh.MockCommand{Match: "docker info", Output: ""},
 		ssh.MockCommand{Match: "docker network", Output: "teploy"},
 		ssh.MockCommand{Match: "mkdir", Output: ""},
+		ssh.MockCommand{Match: "chown", Output: ""},
+		ssh.MockCommand{Match: "test -s /deployments/caddy/Caddyfile", Output: ""},
 		ssh.MockCommand{Match: "docker ps -a --filter name=", Output: "caddy"},
+		// Existing Caddy already launched with --resume: skip recreation.
+		ssh.MockCommand{Match: "docker inspect -f", Output: "caddy run --config /etc/caddy/Caddyfile --adapter caddyfile --resume"},
 	)
 
 	var buf bytes.Buffer
-	if err := setupServer(context.Background(), mock, &buf); err != nil {
+	if err := setupServer(context.Background(), mock, &buf, true); err != nil {
 		t.Fatalf("setupServer: %v", err)
 	}
 
@@ -136,6 +142,83 @@ func TestSetupServer_CaddyAlreadyRunning(t *testing.T) {
 	}
 }
 
+func TestSetupServer_CaddyUpgradePreservesNetworksAndCaddyfile(t *testing.T) {
+	// Simulates an existing server (e.g., post-Dokploy migration) where
+	// Caddy was launched without --resume, the Caddyfile holds real
+	// production routes, and Caddy is on multiple networks. Upgrade must
+	// preserve Caddyfile, reattach non-teploy networks, and not silently
+	// take the server down.
+	mock := ssh.NewMockExecutor("1.2.3.4",
+		ssh.MockCommand{Match: "whoami", Output: "root"},
+		ssh.MockCommand{Match: "docker --version", Output: "Docker version 24.0.0"},
+		ssh.MockCommand{Match: "ufw status", Err: fmt.Errorf("not found")},
+		ssh.MockCommand{Match: "systemctl", Err: fmt.Errorf("inactive")},
+		ssh.MockCommand{Match: "docker info", Output: ""},
+		ssh.MockCommand{Match: "docker network", Output: "teploy"},
+		ssh.MockCommand{Match: "mkdir", Output: ""},
+		ssh.MockCommand{Match: "chown", Output: ""},
+		ssh.MockCommand{Match: "test -s /deployments/caddy/Caddyfile", Output: ""},
+		ssh.MockCommand{Match: "docker ps -a --filter name=", Output: "caddy"},
+		// Legacy Caddy cmd: no --resume, must upgrade.
+		ssh.MockCommand{Match: "docker inspect -f '{{join .Config.Cmd", Output: "caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"},
+		// Extra networks the existing caddy is attached to.
+		ssh.MockCommand{Match: "docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}", Output: "teploy dokploy-network bridge "},
+		ssh.MockCommand{Match: "docker rm -f caddy", Output: ""},
+		ssh.MockCommand{Match: "docker run", Output: "caddy_id"},
+		ssh.MockCommand{Match: "docker network connect dokploy-network caddy", Output: ""},
+		ssh.MockCommand{Match: "docker network connect bridge caddy", Output: ""},
+	)
+
+	var buf bytes.Buffer
+	if err := setupServer(context.Background(), mock, &buf, true); err != nil {
+		t.Fatalf("setupServer: %v", err)
+	}
+
+	// The stub Caddyfile must NOT have been uploaded — the existing one is preserved.
+	if _, uploaded := mock.Files["/deployments/caddy/Caddyfile"]; uploaded {
+		t.Error("Caddyfile should have been preserved, not overwritten with stub")
+	}
+	if !strings.Contains(buf.String(), "Existing Caddyfile preserved") {
+		t.Error("should report existing Caddyfile preserved")
+	}
+
+	// The upgraded container must launch with --resume and /config volume.
+	var runCmd string
+	for _, c := range mock.Calls {
+		if strings.HasPrefix(c, "docker run") {
+			runCmd = c
+		}
+	}
+	for _, want := range []string{"--resume", "caddy_config:/config"} {
+		if !strings.Contains(runCmd, want) {
+			t.Errorf("recreated Caddy missing %q\ngot: %s", want, runCmd)
+		}
+	}
+
+	// Must reattach dokploy-network and bridge, but not the base teploy network.
+	foundDokploy, foundBridge, foundTeployReattach := false, false, false
+	for _, c := range mock.Calls {
+		if strings.Contains(c, "docker network connect dokploy-network caddy") {
+			foundDokploy = true
+		}
+		if strings.Contains(c, "docker network connect bridge caddy") {
+			foundBridge = true
+		}
+		if strings.Contains(c, "docker network connect teploy caddy") {
+			foundTeployReattach = true
+		}
+	}
+	if !foundDokploy {
+		t.Error("should reattach dokploy-network to recreated Caddy")
+	}
+	if !foundBridge {
+		t.Error("should reattach bridge network to recreated Caddy")
+	}
+	if foundTeployReattach {
+		t.Error("should not reattach base teploy network — already attached via docker run")
+	}
+}
+
 func TestSetupServer_UFWActive(t *testing.T) {
 	mock := ssh.NewMockExecutor("1.2.3.4",
 		ssh.MockCommand{Match: "whoami", Output: "root"},
@@ -146,12 +229,14 @@ func TestSetupServer_UFWActive(t *testing.T) {
 		ssh.MockCommand{Match: "docker info", Output: ""},
 		ssh.MockCommand{Match: "docker network", Output: "teploy"},
 		ssh.MockCommand{Match: "mkdir", Output: ""},
+		ssh.MockCommand{Match: "chown", Output: ""},
+		ssh.MockCommand{Match: "test -s /deployments/caddy/Caddyfile", Err: fmt.Errorf("no such file")},
 		ssh.MockCommand{Match: "docker ps -a --filter name=", Output: ""},
 		ssh.MockCommand{Match: "docker run", Output: "caddy_id"},
 	)
 
 	var buf bytes.Buffer
-	if err := setupServer(context.Background(), mock, &buf); err != nil {
+	if err := setupServer(context.Background(), mock, &buf, true); err != nil {
 		t.Fatalf("setupServer: %v", err)
 	}
 

@@ -83,9 +83,24 @@ func Rollback(ctx context.Context, exec ssh.Executor, out io.Writer, cfg Rollbac
 	}
 	fmt.Fprintln(out, "  Health check passed")
 
-	// 4. Route traffic to previous port.
+	// 4. Route traffic to previous container.
+	// Use the explicit previous container name rather than the app network
+	// alias so Docker DNS doesn't briefly round-robin to the current
+	// (about-to-be-stopped) container during the swap.
+	//
+	// Caddy dials the upstream over the Docker network, so it needs the
+	// container's *internal* port — not the host-mapped port stored in
+	// state as PreviousPort (used for health checks). The two often
+	// match but can differ when the app's ContainerPort config has
+	// changed. Inspect the live container so rollback routes correctly
+	// regardless.
 	fmt.Fprintln(out, "Updating routes...")
-	if err := cd.SetRoute(ctx, cfg.App, cfg.Domain, current.PreviousPort); err != nil {
+	previousContainer := docker.ContainerName(cfg.App, "web", current.PreviousHash)
+	internalPort, err := dk.InternalPort(ctx, previousContainer)
+	if err != nil {
+		return fmt.Errorf("inspecting previous container port: %w", err)
+	}
+	if err := cd.SetRoute(ctx, cfg.App, cfg.Domain, previousContainer, internalPort); err != nil {
 		return fmt.Errorf("updating route: %w", err)
 	}
 	fmt.Fprintln(out, "  Traffic routed to previous version")
