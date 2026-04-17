@@ -98,8 +98,17 @@ func (c *AppConfig) validate() error {
 	if c.Domain == "" {
 		return fmt.Errorf("'domain' is required")
 	}
-	if !validDomain.MatchString(c.Domain) {
-		return fmt.Errorf("'domain' contains invalid characters (got %q)", c.Domain)
+	// A single comma-separated list is supported so one app can serve multiple
+	// hosts (e.g. "example.com, www.example.com"). Each entry is validated
+	// independently against the single-host regex.
+	for _, host := range strings.Split(c.Domain, ",") {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			return fmt.Errorf("'domain' contains an empty entry (got %q)", c.Domain)
+		}
+		if !validDomain.MatchString(host) {
+			return fmt.Errorf("'domain' contains invalid characters (got %q)", c.Domain)
+		}
 	}
 	if c.Platform != "" && !validPlatform.MatchString(c.Platform) {
 		return fmt.Errorf("'platform' must be os/arch (e.g. linux/amd64, linux/arm64), got %q", c.Platform)
