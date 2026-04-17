@@ -134,31 +134,84 @@ TOML is also supported (`teploy.toml`).
 
 ## Commands
 
+### Core
 ```
-teploy init                    # generate config
-teploy setup <server>          # provision server (Docker + Caddy)
-teploy deploy                  # deploy app
-teploy deploy -d staging       # deploy with environment overlay
-teploy rollback                # revert to previous version
-teploy stop / start / restart  # container lifecycle
-teploy logs                    # tail container logs
-teploy status                  # show running containers
-teploy stats                   # CPU/RAM per container
-teploy health                  # run health check
-teploy log                     # deploy history
-teploy env set KEY=value       # set environment variable
-teploy env list                # list env vars (masked)
-teploy secret set KEY value    # encrypted secrets
-teploy maintenance on/off      # maintenance mode (503 page)
-teploy lock / unlock           # freeze/unfreeze deploys
-teploy exec <server> <cmd>     # run command on server
-teploy scale <count>           # multi-server deploy + LB update
-teploy preview <branch>        # preview environments
-teploy validate                # check config and server readiness
-teploy server add/remove/list  # manage server fleet
-teploy accessory start/stop    # manage databases and caches
-teploy backup                  # backup volumes to S3
-teploy template deploy <name>  # deploy from community templates
+teploy init                               # generate config
+teploy setup <server> [--yes] [--no-harden]  # provision server (Docker + Caddy + firewall)
+teploy deploy [server]                    # deploy app (reads teploy.yml)
+teploy deploy --app X --image Y --domain Z # ad-hoc deploy without teploy.yml
+teploy deploy -d staging                  # deploy with destination overlay
+teploy rollback                           # revert to previous version
+teploy stop / start / restart             # container lifecycle
+teploy logs [--tail N] [--process web]    # stream container logs
+teploy status                             # show running containers
+teploy stats                              # CPU/RAM per container
+teploy health                             # run health check on live app
+teploy log                                # deploy history
+teploy exec <cmd>                         # run command on server
+teploy validate                           # check config and server readiness
+teploy scale <count>                      # multi-server deploy + LB update
+teploy ui                                 # launch local dashboard
+teploy version / update                   # version info and self-update
+```
+
+### App lifecycle
+```
+teploy lock [--message "..."]   # freeze deploys (incident/maintenance)
+teploy unlock                   # release deploy lock
+teploy maintenance on / off     # toggle 503 maintenance page
+```
+
+### Secrets and env
+```
+teploy env set KEY=value           # set env var
+teploy env get KEY                 # read env var
+teploy env list [--reveal]         # list env vars (masked by default)
+teploy env unset KEY               # remove env var
+teploy secret set KEY <value>      # encrypted secret
+teploy secret get / list / rotate  # secret management
+```
+
+### Fleet
+```
+teploy server add <name> <host>    # add server to ~/.teploy/servers.yml
+teploy server list / remove        # fleet management
+teploy network setup <provider>    # VPN mesh (tailscale, headscale, netbird)
+teploy network status / join       # VPN management
+```
+
+### Accessories
+```
+teploy accessory list              # list running accessories
+teploy accessory start <name>      # start accessory (Postgres, Redis, etc.)
+teploy accessory stop / logs / upgrade / backup / restore <name>
+```
+
+### Previews
+```
+teploy preview deploy <branch>     # route subdomain to a pre-built image
+teploy preview list                # list active previews
+teploy preview destroy <branch>    # tear down a preview
+teploy preview prune               # remove expired previews
+```
+
+### Backups
+```
+teploy backup create               # backup volumes to S3
+teploy backup list / restore <id>
+teploy backup schedule             # cron-driven backups
+```
+
+### Auto-deploy
+```
+teploy autodeploy setup            # webhook-triggered auto-deploys
+teploy autodeploy status / remove
+```
+
+### Registry and templates
+```
+teploy registry login / list / remove   # manage container registry credentials
+teploy template list / info / deploy    # community app templates
 ```
 
 ## Multi-server deploys

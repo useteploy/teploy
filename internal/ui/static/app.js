@@ -201,6 +201,28 @@ document.addEventListener('alpine:init', () => {
         showToast(e.message, 'error');
       }
     },
+
+    async deleteProject(groupName, projectName) {
+      if (!confirm(`Delete project "${projectName}"? Apps inside remain in the group.`)) return;
+      try {
+        await api.del(`/api/groups/${encodeURIComponent(groupName)}/projects/${encodeURIComponent(projectName)}`);
+        showToast('Project deleted', 'success');
+        await this.load();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    },
+
+    async unassignFromGroup(groupName, appName) {
+      if (!confirm(`Remove "${appName}" from group "${groupName}"?`)) return;
+      try {
+        await api.del(`/api/groups/${encodeURIComponent(groupName)}/apps/${encodeURIComponent(appName)}`);
+        showToast('App removed from group', 'success');
+        await this.load();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    },
   }));
 
   // ── Project Detail Page ──
@@ -245,6 +267,28 @@ document.addEventListener('alpine:init', () => {
 
     openApp(name) {
       Alpine.store('router').navigate('app-detail', { name, fromProject: this.projectName, fromGroup: this.groupName });
+    },
+
+    async unassignFromProject(appName) {
+      if (!confirm(`Remove "${appName}" from project "${this.projectName}"?`)) return;
+      try {
+        await api.del(`/api/groups/${encodeURIComponent(this.groupName)}/projects/${encodeURIComponent(this.projectName)}/apps/${encodeURIComponent(appName)}`);
+        showToast('App removed from project', 'success');
+        await this.load();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    },
+
+    async deleteThisProject() {
+      if (!confirm(`Delete project "${this.projectName}"? Apps remain in the group.`)) return;
+      try {
+        await api.del(`/api/groups/${encodeURIComponent(this.groupName)}/projects/${encodeURIComponent(this.projectName)}`);
+        showToast('Project deleted', 'success');
+        Alpine.store('router').navigate('projects');
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
     },
 
     openDeployForm() {
@@ -512,6 +556,8 @@ document.addEventListener('alpine:init', () => {
     loading: true,
     // Add server form
     newServer: { name: '', host: '', user: 'root', role: 'app' },
+    // Edit server form (null when not editing)
+    editingServer: null,
     // Add registry form
     newReg: { server: '', username: '', password: '' },
     // Add group form
@@ -583,6 +629,48 @@ document.addEventListener('alpine:init', () => {
         await this.loadAll();
       } catch (e) {
         showToast(e.message, 'error');
+      }
+    },
+
+    async renameGroup(oldName) {
+      const newName = prompt('New group name:', oldName);
+      if (!newName || newName === oldName) return;
+      try {
+        await api.put(`/api/groups/${encodeURIComponent(oldName)}`, { name: newName });
+        showToast('Group renamed', 'success');
+        await this.loadAll();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    },
+
+    editServer(name) {
+      const srv = this.servers[name] || {};
+      this.editingServer = {
+        originalName: name,
+        name,
+        host: srv.host || '',
+        user: srv.user || 'root',
+        role: srv.role || 'app',
+      };
+    },
+
+    cancelEdit() {
+      this.editingServer = null;
+    },
+
+    async saveEditServer() {
+      const e = this.editingServer;
+      if (!e || !e.name || !e.host) return;
+      try {
+        await api.put(`/api/config/servers/${encodeURIComponent(e.originalName)}`, {
+          name: e.name, host: e.host, user: e.user, role: e.role,
+        });
+        showToast('Server updated', 'success');
+        this.editingServer = null;
+        await this.loadAll();
+      } catch (err) {
+        showToast(err.message, 'error');
       }
     },
 

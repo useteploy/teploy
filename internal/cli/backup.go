@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/useteploy/teploy/internal/backup"
 	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/notify"
 )
 
 func newBackupCmd(flags *Flags) *cobra.Command {
@@ -72,10 +73,27 @@ func runBackupCreate(flags *Flags, bucket, region string) error {
 	defer executor.Close()
 
 	client := backup.NewClient(executor, os.Stdout)
-	return client.BackupVolumes(ctx, appCfg.App, backup.S3Config{
+	err = client.BackupVolumes(ctx, appCfg.App, backup.S3Config{
 		Bucket: bucket,
 		Region: region,
 	})
+
+	// Fire notification (fire-and-forget).
+	if n := buildNotifier(appCfg); n != nil {
+		msg := fmt.Sprintf("Backup created for %s", appCfg.App)
+		if err != nil {
+			msg = fmt.Sprintf("Backup failed for %s: %s", appCfg.App, err)
+		}
+		n.Send(ctx, notify.Payload{
+			App:     appCfg.App,
+			Server:  executor.Host(),
+			Type:    "backup",
+			Success: err == nil,
+			Message: msg,
+		})
+	}
+
+	return err
 }
 
 func newBackupListCmd(flags *Flags) *cobra.Command {

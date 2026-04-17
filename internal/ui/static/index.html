@@ -95,23 +95,29 @@
               <div class="card-grid">
                 <!-- Project cards -->
                 <template x-for="proj in group.projects" :key="'proj-' + proj.name">
-                  <div class="card card-project" @click="openProject(group.name, proj.name)">
+                  <div class="card card-project" style="position: relative;" @click="openProject(group.name, proj.name)">
                     <div class="card-title">
                       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink: 0;"><path d="M1.5 2A1.5 1.5 0 0 1 3 .5h4.586a1.5 1.5 0 0 1 1.06.44l.914.913a.5.5 0 0 0 .354.147H13A1.5 1.5 0 0 1 14.5 3.5v9A1.5 1.5 0 0 1 13 14H3A1.5 1.5 0 0 1 1.5 12.5V2Z" stroke="currentColor" stroke-width="1.2"/></svg>
                       <span x-text="proj.name"></span>
                     </div>
                     <div class="card-meta" x-text="(proj.resolvedApps || []).length + ' app' + ((proj.resolvedApps || []).length !== 1 ? 's' : '')"></div>
+                    <button class="card-delete-btn" title="Delete project"
+                      @click.stop="deleteProject(group.name, proj.name)"
+                      style="position: absolute; top: 8px; right: 8px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 6px; font-size: 11px; opacity: 0.6;">&times;</button>
                   </div>
                 </template>
                 <!-- Direct app cards -->
                 <template x-for="app in group.directApps" :key="app.name">
-                  <div class="card" @click="openApp(app.name)">
+                  <div class="card" style="position: relative;" @click="openApp(app.name)">
                     <div class="card-title">
                       <span class="status-dot" :class="app.status"></span>
                       <span x-text="app.name"></span>
                     </div>
                     <div class="card-meta" x-text="app.server"></div>
                     <div class="card-hash" x-text="app.version || app.status"></div>
+                    <button class="card-delete-btn" x-show="!group.system" title="Remove from group"
+                      @click.stop="unassignFromGroup(group.name, app.name)"
+                      style="position: absolute; top: 8px; right: 8px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 6px; font-size: 11px; opacity: 0.6;">&times;</button>
                   </div>
                 </template>
               </div>
@@ -148,7 +154,10 @@
               <h1 class="page-title" x-text="projectName"></h1>
               <div class="card-meta" x-text="groupName"></div>
             </div>
-            <button class="btn btn-primary" @click="openDeployForm()">+ Deploy</button>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-primary" @click="openDeployForm()">+ Deploy</button>
+              <button class="btn btn-danger" @click="deleteThisProject()">Delete Project</button>
+            </div>
           </div>
 
           <!-- Inline deploy form -->
@@ -192,13 +201,16 @@
 
           <div class="card-grid">
             <template x-for="app in projectApps" :key="app.name">
-              <div class="card" @click="openApp(app.name)">
+              <div class="card" style="position: relative;" @click="openApp(app.name)">
                 <div class="card-title">
                   <span class="status-dot" :class="app.status"></span>
                   <span x-text="app.name"></span>
                 </div>
                 <div class="card-meta" x-text="app.server"></div>
                 <div class="card-hash" x-text="app.version || app.status"></div>
+                <button class="card-delete-btn" title="Remove from project"
+                  @click.stop="unassignFromProject(app.name)"
+                  style="position: absolute; top: 8px; right: 8px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 6px; font-size: 11px; opacity: 0.6;">&times;</button>
               </div>
             </template>
           </div>
@@ -709,13 +721,48 @@
                       <td style="font-family: var(--mono); font-size: 12px;" x-text="s.host"></td>
                       <td x-text="s.user || 'root'"></td>
                       <td x-text="(s.role || 'app') === 'lb' ? 'Load Balancer' : 'Standard'"></td>
-                      <td>
+                      <td style="display: flex; gap: 6px; justify-content: flex-end;">
+                        <button class="btn btn-sm" @click="editServer(s.name)">Edit</button>
                         <button class="btn btn-sm btn-danger" @click="deleteServer(s.name)">Remove</button>
                       </td>
                     </tr>
                   </template>
                 </tbody>
               </table>
+            </div>
+          </template>
+
+          <!-- Edit Server Form -->
+          <template x-if="editingServer">
+            <div class="table-wrap" style="padding: 20px; margin-top: 16px;">
+              <h3 class="section-title" style="font-size: 14px;">Edit <span x-text="editingServer.originalName"></span></h3>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Name</label>
+                  <input class="form-input" x-model="editingServer.name">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Host</label>
+                  <input class="form-input" x-model="editingServer.host">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">User</label>
+                  <input class="form-input" x-model="editingServer.user">
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Role</label>
+                  <select class="form-input" x-model="editingServer.role">
+                    <option value="app">Standard</option>
+                    <option value="lb">Load Balancer</option>
+                  </select>
+                </div>
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 12px;">
+                <button class="btn btn-primary" @click="saveEditServer()">Save</button>
+                <button class="btn" @click="cancelEdit()">Cancel</button>
+              </div>
             </div>
           </template>
         </div>
@@ -746,7 +793,8 @@
                     <tr>
                       <td x-text="g.name"></td>
                       <td x-text="(g.apps || []).length"></td>
-                      <td>
+                      <td style="display: flex; gap: 6px; justify-content: flex-end;">
+                        <button class="btn btn-sm" @click="renameGroup(g.name)">Rename</button>
                         <button class="btn btn-sm btn-danger" @click="deleteGroup(g.name)">Delete</button>
                       </td>
                     </tr>

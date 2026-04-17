@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/useteploy/teploy/internal/config"
+	"github.com/useteploy/teploy/internal/notify"
 	"github.com/useteploy/teploy/internal/preview"
 )
 
@@ -31,8 +32,19 @@ func newPreviewDeployCmd(flags *Flags) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "deploy <branch>",
-		Short: "Deploy a branch preview",
-		Args:  cobra.ExactArgs(1),
+		Short: "Deploy a preview environment for a branch",
+		Long: `Deploy a preview environment on a temporary <branch>.<domain> subdomain.
+
+Uses the current working directory's code (whatever branch is checked out
+locally) and the image already configured in teploy.yml. To preview a
+different branch, check it out first and build the image — preview deploy
+does not run its own build or git checkout.
+
+Example:
+  git checkout feat/new-landing
+  teploy deploy --image registry/myapp:feat-new-landing
+  teploy preview deploy feat-new-landing --ttl 24h`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPreviewDeploy(flags, args[0], ttl)
 		},
@@ -75,7 +87,7 @@ func runPreviewDeploy(flags *Flags, branch, ttlStr string) error {
 	}
 
 	mgr := preview.NewManager(executor, os.Stdout)
-	return mgr.Deploy(ctx, preview.DeployConfig{
+	err = mgr.Deploy(ctx, preview.DeployConfig{
 		App:     appCfg.App,
 		Domain:  appCfg.Domain,
 		Branch:  branch,
@@ -83,6 +95,23 @@ func runPreviewDeploy(flags *Flags, branch, ttlStr string) error {
 		Version: version,
 		TTL:     ttl,
 	})
+
+	if n := buildNotifier(appCfg); n != nil {
+		msg := fmt.Sprintf("Preview %s deployed for %s", branch, appCfg.App)
+		if err != nil {
+			msg = fmt.Sprintf("Preview %s failed for %s: %s", branch, appCfg.App, err)
+		}
+		n.Send(ctx, notify.Payload{
+			App:     appCfg.App,
+			Server:  executor.Host(),
+			Type:    "preview",
+			Success: err == nil,
+			Hash:    version,
+			Message: msg,
+		})
+	}
+
+	return err
 }
 
 func newPreviewListCmd(flags *Flags) *cobra.Command {
