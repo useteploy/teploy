@@ -41,6 +41,8 @@ func TestDeploy(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy_config.json", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		ssh.MockCommand{Match: "UPLOAD:", Output: ""},
 	)
 

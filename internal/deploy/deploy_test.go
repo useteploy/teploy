@@ -42,6 +42,8 @@ func TestDeploy_FirstDeploy(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		// 10. Caddy temp cleanup.
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// 11. Log append.
 		ssh.MockCommand{Match: "cat /tmp/teploy_log_entry", Output: ""},
 		// 12. Release lock.
@@ -136,6 +138,8 @@ func TestDeploy_UpdateExisting(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// Stop and remove old container.
 		ssh.MockCommand{Match: "docker stop", Output: ""},
 		ssh.MockCommand{Match: "docker rm", Output: ""},
@@ -394,6 +398,8 @@ func TestDeploy_SameVersion(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// Stop renamed container.
 		ssh.MockCommand{Match: "docker stop", Output: ""},
 		ssh.MockCommand{Match: "docker rm", Output: ""},
@@ -450,6 +456,8 @@ func TestDeploy_WithHooks(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// Log and lock.
 		ssh.MockCommand{Match: "cat /tmp/teploy_log_entry", Output: ""},
 		ssh.MockCommand{Match: "rm -rf /deployments/myapp/.lock", Output: ""},
@@ -564,6 +572,8 @@ func TestDeploy_PostDeployHookFailure(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// Post-deploy hook fails.
 		ssh.MockCommand{Match: "docker exec", Output: "cache clear failed", Err: fmt.Errorf("exit status 1")},
 		// Log and lock (deploy still succeeds).
@@ -623,6 +633,8 @@ func TestDeploy_WithWorkers(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// Log and lock.
 		ssh.MockCommand{Match: "cat /tmp/teploy_log_entry", Output: ""},
 		ssh.MockCommand{Match: "rm -rf /deployments/myapp/.lock", Output: ""},
@@ -713,6 +725,8 @@ func TestDeploy_WorkerStartFailure(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// Stop old containers.
 		ssh.MockCommand{Match: "docker stop", Output: ""},
 		ssh.MockCommand{Match: "docker rm", Output: ""},
@@ -773,6 +787,8 @@ func TestDeploy_AssetBridging(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// 10. Asset cleanup.
 		ssh.MockCommand{Match: "find /deployments/myapp/assets", Output: ""},
 		// 11. Log and lock.
@@ -851,6 +867,8 @@ func TestDeploy_AssetBridgingCustomKeepDays(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		ssh.MockCommand{Match: "find /deployments/myapp/assets", Output: ""},
 		ssh.MockCommand{Match: "cat /tmp/teploy_log_entry", Output: ""},
 		ssh.MockCommand{Match: "rm -rf /deployments/myapp/.lock", Output: ""},
@@ -899,6 +917,8 @@ func TestDeploy_SameVersionWithWorkers(t *testing.T) {
 		ssh.MockCommand{Match: "curl -sf -X PATCH", Err: fmt.Errorf("not found")},
 		ssh.MockCommand{Match: "curl -sf -X POST http://localhost:2019/config/apps/http/servers/srv0/routes", Output: ""},
 		ssh.MockCommand{Match: "rm -f /tmp/teploy_caddy", Output: ""},
+		ssh.MockCommand{Match: "cat /deployments/caddy/Caddyfile", Output: "{\n\tadmin 0.0.0.0:2019\n}\n"},
+		ssh.MockCommand{Match: "mv /tmp/teploy_caddyfile.tmp", Output: ""},
 		// Stop renamed containers.
 		ssh.MockCommand{Match: "docker stop", Output: ""},
 		ssh.MockCommand{Match: "docker rm", Output: ""},

@@ -5,13 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/useteploy/teploy/internal/ssh"
 )
 
 const (
-	adminAPI  = "http://localhost:2019"
-	tmpConfig = "/tmp/teploy_caddy_config.json"
+	adminAPI        = "http://localhost:2019"
+	tmpConfig       = "/tmp/teploy_caddy_config.json"
+	caddyfilePath   = "/deployments/caddy/Caddyfile"
+	tmpCaddyfile    = "/tmp/teploy_caddyfile.tmp"
+	markerBeginFmt  = "# TEPLOY BEGIN %s"
+	markerEndFmt    = "# TEPLOY END %s"
 )
 
 // HTTPApp represents Caddy's HTTP application configuration.
@@ -91,6 +96,9 @@ func NewClient(exec ssh.Executor) *Client {
 // Routes traffic for the domain to the given upstream at the specified
 // container port. Caddy provisions HTTPS certificates automatically.
 //
+// The `domain` argument may be a comma-separated list (e.g.
+// "example.com, www.example.com") to serve the same app on multiple hosts.
+//
 // Callers should pass a specific container name as the upstream rather
 // than a shared network alias: during deploys the alias can resolve to
 // both old and new containers and Docker DNS round-robins between them,
@@ -99,10 +107,14 @@ func NewClient(exec ssh.Executor) *Client {
 // Uses Caddy's ID-based API to surgically upsert a single route without
 // touching any other routes (including those defined in the Caddyfile).
 func (c *Client) SetRoute(ctx context.Context, app, domain, upstream string, containerPort int) error {
+	hosts := parseDomains(domain)
+	if len(hosts) == 0 {
+		return fmt.Errorf("SetRoute: domain must be non-empty")
+	}
 	routeID := "teploy-" + app
 	newRoute := Route{
 		ID:    routeID,
-		Match: []Match{{Host: []string{domain}}},
+		Match: []Match{{Host: hosts}},
 		Handle: []Handler{{
 			Handler:   "reverse_proxy",
 			Upstreams: []Upstream{{Dial: fmt.Sprintf("%s:%d", upstream, containerPort)}},
@@ -112,17 +124,28 @@ func (c *Client) SetRoute(ctx context.Context, app, domain, upstream string, con
 	if err := c.ensureServer(ctx); err != nil {
 		return err
 	}
-	return c.putRouteByID(ctx, routeID, newRoute)
+	if err := c.putRouteByID(ctx, routeID, newRoute); err != nil {
+		return err
+	}
+	// Mirror to on-disk Caddyfile so the route survives a manual
+	// `caddy reload --config <file>` (which would otherwise wipe admin-API
+	// state not present in the Caddyfile).
+	return c.upsertCaddyfileBlock(ctx, app, reverseProxyBlock(hosts, upstream, containerPort))
 }
 
 // SetLoadBalancer adds or updates a load-balanced reverse proxy route for the
 // given app. Traffic for the domain is distributed across multiple upstreams
-// using round-robin with active health checks.
+// using round-robin with active health checks. `domain` supports comma-
+// separated lists like SetRoute.
 func (c *Client) SetLoadBalancer(ctx context.Context, app, domain string, upstreams []Upstream) error {
+	hosts := parseDomains(domain)
+	if len(hosts) == 0 {
+		return fmt.Errorf("SetLoadBalancer: domain must be non-empty")
+	}
 	routeID := "teploy-lb-" + app
 	newRoute := Route{
 		ID:    routeID,
-		Match: []Match{{Host: []string{domain}}},
+		Match: []Match{{Host: hosts}},
 		Handle: []Handler{{
 			Handler:   "reverse_proxy",
 			Upstreams: upstreams,
@@ -144,7 +167,10 @@ func (c *Client) SetLoadBalancer(ctx context.Context, app, domain string, upstre
 	if err := c.ensureServer(ctx); err != nil {
 		return err
 	}
-	return c.putRouteByID(ctx, routeID, newRoute)
+	if err := c.putRouteByID(ctx, routeID, newRoute); err != nil {
+		return err
+	}
+	return c.upsertCaddyfileBlock(ctx, "lb-"+app, loadBalancerBlock(hosts, upstreams))
 }
 
 // maintenancePage is the HTML returned during maintenance mode.
@@ -167,12 +193,17 @@ p{color:#666}
 
 // SetMaintenance enables maintenance mode for the given app.
 // Inserts a 503 static response route that intercepts traffic for the domain.
-// The existing reverse proxy route is left in place.
+// The existing reverse proxy route is left in place. `domain` supports comma-
+// separated lists like SetRoute.
 func (c *Client) SetMaintenance(ctx context.Context, app, domain string) error {
+	hosts := parseDomains(domain)
+	if len(hosts) == 0 {
+		return fmt.Errorf("SetMaintenance: domain must be non-empty")
+	}
 	routeID := "teploy-maint-" + app
 	maintRoute := Route{
 		ID:    routeID,
-		Match: []Match{{Host: []string{domain}}},
+		Match: []Match{{Host: hosts}},
 		Handle: []Handler{{
 			Handler:    "static_response",
 			StatusCode: "503",
@@ -200,7 +231,13 @@ func (c *Client) RemoveMaintenance(ctx context.Context, app string) error {
 
 // RemoveRoute removes the route for the given app. No-op if no route exists.
 func (c *Client) RemoveRoute(ctx context.Context, app string) error {
-	return c.deleteRouteByID(ctx, "teploy-"+app)
+	if err := c.deleteRouteByID(ctx, "teploy-"+app); err != nil {
+		return err
+	}
+	// Remove both the regular and lb-variants on-disk in a single file
+	// rewrite — an app only uses one mode at a time, and two separate reads
+	// would race with the first rewrite on any real filesystem.
+	return c.removeCaddyfileBlocks(ctx, app, "lb-"+app)
 }
 
 // ensureServer makes sure Caddy has an HTTP server (srv0) configured with
@@ -347,4 +384,133 @@ func (c *Client) getHTTPApp(ctx context.Context) (*HTTPApp, error) {
 		return nil, fmt.Errorf("parsing caddy HTTP config: %w", err)
 	}
 	return &app, nil
+}
+
+// upsertCaddyfileBlock idempotently writes a Teploy-managed snippet for `app`
+// into the on-disk Caddyfile, wrapped in per-app markers. Passing block=""
+// removes the block.
+//
+// This exists because Teploy routes live only in Caddy's admin API config.
+// Without mirroring to disk, a manual `caddy reload --config <file>` loads
+// the Caddyfile and wipes every Teploy route. Mirroring makes the on-disk
+// Caddyfile the source of truth that survives any reload.
+//
+// The caller is expected to have already updated admin API state; this
+// function only syncs the on-disk representation. Written atomically via a
+// temp-file + mv to avoid a partial Caddyfile being observed by another
+// reader mid-write.
+func (c *Client) upsertCaddyfileBlock(ctx context.Context, app, block string) error {
+	current, err := c.exec.Run(ctx, "cat "+caddyfilePath)
+	if err != nil {
+		return fmt.Errorf("reading caddyfile (did setup run?): %w", err)
+	}
+
+	begin := fmt.Sprintf(markerBeginFmt, app)
+	end := fmt.Sprintf(markerEndFmt, app)
+	updated := removeCaddyfileBlock(current, begin, end)
+
+	if block != "" {
+		wrapped := begin + "\n" + strings.TrimRight(block, "\n") + "\n" + end
+		updated = strings.TrimRight(updated, "\n") + "\n\n" + wrapped + "\n"
+	} else {
+		// On removal, tidy trailing whitespace so repeated remove calls don't drift.
+		updated = strings.TrimRight(updated, "\n") + "\n"
+	}
+
+	if err := c.exec.Upload(ctx, strings.NewReader(updated), tmpCaddyfile, "0644"); err != nil {
+		return fmt.Errorf("uploading caddyfile: %w", err)
+	}
+	if _, err := c.exec.Run(ctx, "mv "+tmpCaddyfile+" "+caddyfilePath); err != nil {
+		return fmt.Errorf("writing caddyfile: %w", err)
+	}
+	return nil
+}
+
+// removeCaddyfileBlock removes every region bounded by `begin`..`end` from the
+// content, collapsing surrounding blank lines so repeated upserts don't cause
+// the Caddyfile to grow stray whitespace. Tolerates a missing end marker by
+// trimming from the begin marker to end-of-file.
+func removeCaddyfileBlock(content, begin, end string) string {
+	for {
+		bi := strings.Index(content, begin)
+		if bi < 0 {
+			return content
+		}
+		tail := content[bi:]
+		ei := strings.Index(tail, end)
+		if ei < 0 {
+			// Malformed (missing end marker) — best-effort truncate.
+			return strings.TrimRight(content[:bi], "\n") + "\n"
+		}
+		ei = bi + ei + len(end)
+		before := content[:bi]
+		after := strings.TrimLeft(content[ei:], "\n")
+		switch {
+		case before == "":
+			content = after
+		case after == "":
+			content = strings.TrimRight(before, "\n") + "\n"
+		default:
+			content = strings.TrimRight(before, "\n") + "\n\n" + after
+		}
+	}
+}
+
+// removeCaddyfileBlocks strips Teploy-managed blocks for all given apps in a
+// single file read/write. Used by paths like RemoveRoute that would otherwise
+// issue overlapping reads and race on the on-disk state.
+func (c *Client) removeCaddyfileBlocks(ctx context.Context, apps ...string) error {
+	current, err := c.exec.Run(ctx, "cat "+caddyfilePath)
+	if err != nil {
+		return fmt.Errorf("reading caddyfile (did setup run?): %w", err)
+	}
+
+	updated := current
+	for _, app := range apps {
+		begin := fmt.Sprintf(markerBeginFmt, app)
+		end := fmt.Sprintf(markerEndFmt, app)
+		updated = removeCaddyfileBlock(updated, begin, end)
+	}
+	updated = strings.TrimRight(updated, "\n") + "\n"
+
+	if err := c.exec.Upload(ctx, strings.NewReader(updated), tmpCaddyfile, "0644"); err != nil {
+		return fmt.Errorf("uploading caddyfile: %w", err)
+	}
+	if _, err := c.exec.Run(ctx, "mv "+tmpCaddyfile+" "+caddyfilePath); err != nil {
+		return fmt.Errorf("writing caddyfile: %w", err)
+	}
+	return nil
+}
+
+// parseDomains splits a Teploy config "domain" field into a normalized host
+// list, tolerating comma-separated entries with incidental whitespace. Returns
+// nil when the input yields no non-empty hosts.
+func parseDomains(domain string) []string {
+	parts := strings.Split(domain, ",")
+	hosts := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if h := strings.TrimSpace(p); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}
+
+// reverseProxyBlock renders a Caddyfile snippet equivalent to the admin-API
+// route produced by SetRoute. Kept in lockstep with putRouteByID's payload.
+func reverseProxyBlock(hosts []string, upstream string, port int) string {
+	return fmt.Sprintf("%s {\n\treverse_proxy %s:%d\n}", strings.Join(hosts, ", "), upstream, port)
+}
+
+// loadBalancerBlock renders a Caddyfile snippet equivalent to the admin-API
+// route produced by SetLoadBalancer. Round-robin + active /up health checks.
+func loadBalancerBlock(hosts []string, upstreams []Upstream) string {
+	dials := make([]string, len(upstreams))
+	for i, u := range upstreams {
+		dials[i] = u.Dial
+	}
+	return fmt.Sprintf(
+		"%s {\n\treverse_proxy %s {\n\t\tlb_policy round_robin\n\t\thealth_uri /up\n\t\thealth_interval 10s\n\t\thealth_timeout 5s\n\t}\n}",
+		strings.Join(hosts, ", "), strings.Join(dials, " "),
+	)
 }
