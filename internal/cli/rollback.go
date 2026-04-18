@@ -77,7 +77,7 @@ func runRollback(flags *Flags) error {
 }
 
 // runRollbackByApp rolls back using server-side state instead of a local teploy.yml.
-// Used by teploy-ui and for running rollback outside of an app directory.
+// Used by teploy-dash and for running rollback outside of an app directory.
 func runRollbackByApp(flags *Flags, appName string) error {
 	if flags.Host == "" {
 		return fmt.Errorf("--host is required when using --app")

@@ -41,7 +41,7 @@ func newDeployCmd(flags *Flags) *cobra.Command {
 		Long: `Start a new container with health checking, route traffic via Caddy, and stop the old container — zero downtime.
 Use -d to deploy with a destination overlay (e.g. -d staging merges teploy.staging.yml).
 
-For ad-hoc deploys without a teploy.yml (e.g. from teploy-ui), pass --app, --image, and --domain:
+For ad-hoc deploys without a teploy.yml (e.g. from teploy-dash), pass --app, --image, and --domain:
   teploy deploy myserver --app myapp --image nginx:latest --domain app.example.com`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -68,7 +68,7 @@ For ad-hoc deploys without a teploy.yml (e.g. from teploy-ui), pass --app, --ima
 	return cmd
 }
 
-// runAdHocDeploy handles deploys without a teploy.yml — used by teploy-ui
+// runAdHocDeploy handles deploys without a teploy.yml — used by teploy-dash
 // and scripting. Requires --app and --image at minimum.
 func runAdHocDeploy(flags *Flags, serverName, appName, image, domain string, port int, version string, skipDNSCheck bool) error {
 	if image == "" {
